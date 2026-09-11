@@ -1,0 +1,8 @@
+*
+!deploy/
+!deploy/**
+!scripts/
+!scripts/**
+!vendor/
+!vendor/*.vsix
+!vendor/*.tar.gz

@@ -1,0 +1,13 @@
+{
+  "architecture": "arm64",
+  "assets": {
+    "kilo.vsix": {
+      "url": "https://github.com/Kilo-Org/kilocode/releases/download/v7.5.16/kilo-vscode-linux-arm64.vsix",
+      "sha256": "cf439889fd26696469d0be758f903e9e1744ee3b8170bc702205bde0c2c43b26"
+    },
+    "code-server.tar.gz": {
+      "url": "https://github.com/coder/code-server/releases/download/v4.136.2/code-server-4.136.2-linux-arm64.tar.gz",
+      "sha256": "9feeaf0d49d01ff1baafb0cb6374437a4e7c103cff2c636548283049e60b81e7"
+    }
+  }
+}

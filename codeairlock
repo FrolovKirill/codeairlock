@@ -1,0 +1,40 @@
+#!/usr/bin/env python3
+"""Operator launcher. Never source .env or read repository files."""
+import pathlib
+import subprocess
+import sys
+
+ROOT = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / 'scripts'))
+from configure import generate, envfile
+
+def run(args): return subprocess.run(args, cwd=ROOT, check=True)
+def compose(*args): return run(['docker','compose','-f',str(ROOT/'runtime/compose.json'),*args])
+
+cmd = sys.argv[1] if len(sys.argv)>1 else 'help'
+if cmd == 'init':
+    envfile(); print('Fill .env locally; secrets must not be pasted into cloud chats.')
+elif cmd == 'build':
+    run([sys.executable,'scripts/fetch_assets.py'])
+    run(['docker','build','-f','deploy/infra.Dockerfile','-t','codeairlock-infra:0.1.0','.'])
+    run(['docker','build','-f','deploy/workstation.Dockerfile','-t','codeairlock-workstation:0.1.0','.'])
+elif cmd in ('up','demo'):
+    if (ROOT/'runtime/compose.json').exists(): compose('down','--remove-orphans')
+    generate(demo=cmd=='demo')
+    compose('up','-d','--pull','never')
+elif cmd == 'down': compose('down','--remove-orphans')
+elif cmd == 'fetch': run([sys.executable,'scripts/fetch_assets.py'])
+elif cmd == 'status': compose('ps')
+elif cmd == 'check':
+    compose('exec','-T','workstation','python3','/opt/probe.py')
+elif cmd == 'audit': run([sys.executable,'scripts/audit_namespaces.py'])
+elif cmd == 'index': run([sys.executable,'scripts/index_project.py'])
+elif cmd == 'verify-demo': run([sys.executable,'scripts/verify_demo.py'])
+elif cmd == 'verify-connected-demo': run([sys.executable,'scripts/verify_demo.py','--real-model'])
+elif cmd == 'shell': compose('exec','workstation','bash')
+elif cmd == 'search': compose('exec','-T','gateway','python3','/opt/search_admin.py',*sys.argv[2:])
+elif cmd == 'model-status': compose('exec','-T','gateway','python3','-c',
+    'import sys,json; sys.path.insert(0,"/opt"); from search_admin import call; print(json.dumps(call("GET","/model-status"),indent=2))')
+elif cmd == 'logs': compose('logs','--tail','80',*(sys.argv[2:] or ['workstation']))
+else:
+    print('Usage: ./codeairlock init|fetch|build|demo|up|down|status|check|audit|index|model-status|verify-demo|verify-connected-demo|shell|logs [service]|search list|search approve ID|search deny ID')

@@ -1,0 +1,10 @@
+{
+  "pyright": {
+    "command": ["/usr/local/bin/pyright-langserver", "--stdio"],
+    "extensions": [".py"]
+  },
+  "typescript": {
+    "command": ["/usr/local/bin/typescript-language-server", "--stdio"],
+    "extensions": [".ts", ".tsx", ".js", ".jsx"]
+  }
+}

@@ -2,7 +2,7 @@
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>CodeAirlock · Projects</title><link rel="stylesheet" href="/projects.css"><script src="/projects.js" defer></script></head>
 <body>
-<header><div class="brand"><span class="mark">CA</span><div><strong>CodeAirlock</strong><small>Local project manager</small></div></div><span class="badge">HOST CONTROL · LOCAL ONLY</span><button id="stop" class="quiet" disabled>Stop environment</button></header>
+<header><div class="brand"><span class="mark">CA</span><div><strong>CodeAirlock</strong><small>Local project manager</small></div></div><span class="badge">HOST CONTROL · LOCAL ONLY</span><button id="stop" class="quiet" disabled>Stop environment</button><button id="quit" class="quiet" title="Stop all workspace and search containers, then exit this manager. Sessions and indexes are kept.">Shut down &amp; exit</button></header>
 <main>
 <aside>
 <div class="section-title"><h1>Projects</h1><button id="add-toggle" class="quiet">+ Add folder</button></div>
@@ -14,6 +14,7 @@
 <button type="submit">Add project</button>
 </form>
 <div id="projects" aria-label="Registered projects"></div>
+<div class="note"><strong>Web search approvals</strong><p>Only approve text you are willing to send to public search engines. Each request expires after 10 minutes.</p><button id="search-refresh" class="quiet">Review pending searches</button><p id="search-status" role="status"></p><div id="search-requests"></div></div>
 <div class="note"><strong>Your files stay in place.</strong><p>Read & write saves directly to the original folder. Switching projects stops the current environment. Saved sessions stay with their project.</p></div>
 </aside>
 <section class="workspace">

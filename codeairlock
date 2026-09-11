@@ -47,6 +47,10 @@ elif cmd == 'down':
 elif cmd == 'projects':
     run([sys.executable,'scripts/project_manager.py',*sys.argv[2:]])
 elif cmd == 'fetch': run([sys.executable,'scripts/fetch_assets.py'])
+elif cmd == 'search-build':
+    from local_search import SEARXNG_IMAGE, PROXY_IMAGE
+    run(['docker', 'pull', SEARXNG_IMAGE])
+    run(['docker', 'build', '-f', 'deploy/search-proxy.Dockerfile', '-t', PROXY_IMAGE, 'deploy'])
 elif cmd == 'status': compose('ps')
 elif cmd == 'check':
     compose('exec','-T','workstation','python3','/opt/probe.py')
@@ -63,4 +67,4 @@ elif cmd == 'model-status': compose('exec','-T','gateway','python3','-c',
 elif cmd == 'logs': compose('logs','--tail','80',*(sys.argv[2:] or ['workstation']))
 else:
     print('up/demo --reindex: explicitly create a fresh semantic index; preserve sessions and old indexes.')
-    print('Usage: ./codeairlock projects|init|fetch|build|demo|up|down|status|check|audit|index|model-status|verify-demo|verify-connected-demo|shell|logs [service]|search list|search approve ID|search deny ID')
+    print('Usage: ./codeairlock projects|init|fetch|build|search-build|demo|up|down|status|check|audit|index|model-status|verify-demo|verify-connected-demo|shell|logs [service]|search list|search approve ID|search deny ID')

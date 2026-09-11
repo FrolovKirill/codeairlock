@@ -42,3 +42,21 @@ The Kilo permission system is a user interface control. The kernel-enforced
 container and nftables boundaries are the isolation mechanism. Chromium runs with
 `--no-sandbox` inside that outer boundary. No configuration here protects against
 a compromised host kernel or Docker daemon.
+
+## Bundled search boundary
+
+Bundled SearxNG is opt-in. It has no repository, model credentials or Docker socket.
+Its default-deny namespace allows inbound queries only from the approval gateway
+and outbound TCP only to Squid. Squid has internet/DNS access but accepts only the
+SearxNG source IP, HTTPS CONNECT and the exact search-engine hostnames in
+`scripts/local_search.py`; private/special destination IPs are denied. Neither the
+agent nor gateway can reach that proxy. SearxNG and Squid are trusted components.
+Plugins and query/container logging are disabled, and result pages are never
+fetched. An approved query is still disclosed to the search engines. One approval
+can generate several engine HTTP requests; it is not a one-packet guarantee.
+
+The host project manager exposes authenticated per-query approval controls on its
+existing loopback HTTP server. Its Docker access is trusted; the agent cannot
+reach it. Shutdown uses the same lifecycle lock as project switching and search
+approval, retains volumes, and closes the manager only after successful Compose
+shutdown. A browser/tab close is not equivalent to Shut down & exit.

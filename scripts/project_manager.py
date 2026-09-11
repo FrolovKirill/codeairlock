@@ -16,8 +16,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from configure import ROOT, RUNTIME, envfile, write
 from projects import add_project, get_project, list_projects, update_access, locked
+from search_control import control as search_control
 
-CLI = ROOT / ('codeairlock' if (ROOT / 'codeairlock').exists() else 'secretgpt')
+CLI = ROOT / 'codeairlock'
 
 
 class Operations:
@@ -31,6 +32,7 @@ class Operations:
         self.error = ''
         self.needs_reindex = False
         self.target = None
+        self.quitting = False
     def running_project(self):
         if not (RUNTIME / 'compose.json').exists():
             return None
@@ -76,6 +78,8 @@ class Operations:
 
     def launch(self, project_id=None, access=None, reindex=False, stop=False):
         with self.lock:
+            if self.quitting:
+                raise RuntimeError('The environment is shutting down.')
             if self.busy:
                 raise RuntimeError('Another operation is running. Stop it first.')
             if not stop:
@@ -142,6 +146,52 @@ class Operations:
                     pass
             return True
 
+    def quit_environment(self):
+        """Stop owned work, then the entire Compose stack; keep persistent volumes."""
+        with self.lock:
+            if self.quitting:
+                raise RuntimeError('Shutdown is already in progress.')
+            self.quitting = True
+            worker = self.thread
+        try:
+            self.cancel()
+            if worker and worker.is_alive():
+                worker.join(timeout=120)
+                if worker.is_alive():
+                    raise RuntimeError('The current operation is still stopping. Try again shortly.')
+            # Never compete with a separate CLI operation or an approved search.
+            # Unlike the CLI down command, acquire its lock here, not in a child.
+            with locked('operation', blocking=False):
+                path = RUNTIME / 'compose.json'
+                if path.exists():
+                    with (RUNTIME / 'project-operation.log').open('w') as log:
+                        (RUNTIME / 'project-operation.log').chmod(0o600)
+                        command = ['docker', 'compose', '-f', str(path)]
+                        result = subprocess.run([*command, 'down', '--remove-orphans'],
+                                                stdout=log, stderr=log, timeout=120)
+                        if result.returncode:
+                            raise RuntimeError('Shutdown failed. Check Docker and retry; the manager is still running.')
+                        result = subprocess.run([*command, 'ps', '--all', '--quiet'],
+                                                capture_output=True, text=True, timeout=10)
+                        if result.returncode or result.stdout.strip():
+                            raise RuntimeError('Some containers remain. Check Docker and retry.')
+                else:
+                    # Runtime-file loss must not turn a live stack into a false
+                    # success. Its Compose label is stable across projects.
+                    result = subprocess.run(['docker', 'ps', '--all', '--quiet', '--filter',
+                                             'label=com.docker.compose.project=' + CLI.name],
+                                            capture_output=True, text=True, timeout=10)
+                    if result.returncode:
+                        raise RuntimeError('Cannot verify shutdown. Check Docker and retry.')
+                    if result.stdout.strip():
+                        raise RuntimeError('Containers remain but runtime/compose.json is missing. Restore it before shutdown.')
+                (RUNTIME / 'active-project.json').unlink(missing_ok=True)
+                self.phase = 'Stopped'
+        except BaseException:
+            with self.lock:
+                self.quitting = False
+            raise
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
@@ -177,6 +227,11 @@ class Handler(BaseHTTPRequestHandler):
             state = self.server.operations.state()
             state['ui_port'] = self.server.ui_port
             return self.reply(200, state)
+        if self.path == '/api/search':
+            try:
+                return self.reply(200, search_control())
+            except (ValueError, BlockingIOError, subprocess.TimeoutExpired):
+                return self.reply(409, {'error': 'Search unavailable while the environment is stopped or switching.'})
         static = {'/': ('projects.html', 'text/html; charset=utf-8'),
                   '/projects.js': ('projects.js', 'text/javascript; charset=utf-8'),
                   '/projects.css': ('projects.css', 'text/css; charset=utf-8')}
@@ -201,6 +256,24 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(data, dict):
                 raise ValueError('JSON object required.')
             operations = self.server.operations
+            if getattr(operations, 'quitting', False):
+                raise RuntimeError('The environment is shutting down.')
+            if self.path == '/api/quit':
+                if data:
+                    raise ValueError('Shutdown takes no parameters.')
+                operations.quit_environment()
+                # Report success only after Docker confirms the stack is gone.
+                # HTTPServer.shutdown must run outside its serve_forever thread.
+                try:
+                    self.reply(200, {'stopped': True})
+                    self.wfile.flush()
+                finally:
+                    threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
+            if self.path == '/api/search':
+                if set(data) != {'action', 'id', 'query'} or data['action'] not in ('approve', 'deny'):
+                    raise ValueError('An explicit decision for one exact query is required.')
+                return self.reply(200, search_control(data['action'], data['id'], data['query']))
             if self.path == '/api/projects':
                 if not all(isinstance(data.get(k), str) for k in ('name', 'path', 'access')):
                     raise ValueError('Name, path and access are required.')
@@ -274,6 +347,8 @@ def main():
         if server.operations.thread:
             server.operations.thread.join(timeout=60)
         server.server_close()
+        (RUNTIME / 'manager.pid').unlink(missing_ok=True)
+        (RUNTIME / 'manager-url.txt').unlink(missing_ok=True)
         handle.close()
 
 

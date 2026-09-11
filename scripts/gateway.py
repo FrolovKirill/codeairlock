@@ -15,6 +15,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlencode, urlsplit
+import ollama_adapter
 
 CONFIG = {}
 SEARCHES = {}
@@ -251,10 +252,14 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError()
             if set(data) - allowed:
                 return self.reply(403, {'error': 'Unsupported request fields'})
-            body = json.dumps(data).encode()
+            native = data if name == 'llm' and endpoint.get('ollama') else None
+            outgoing = ollama_adapter.prepare(data, endpoint) if native is not None else data
+            body = json.dumps(outgoing).encode()
         except (ValueError, KeyError, TypeError, AttributeError):
             return self.reply(400, {'error': 'Invalid request'})
-        self.forward(endpoint, 'POST', urlsplit(endpoint['url']).path.rstrip('/') + suffix, body)
+        base = urlsplit(endpoint['url']).path.rstrip('/')
+        path = base[:-3] + '/api/chat' if native is not None else base + suffix
+        self.forward(endpoint, 'POST', path, body, native)
 
     def disconnected(self):
         try:
@@ -280,7 +285,7 @@ class Handler(BaseHTTPRequestHandler):
                                  'upstream_status': upstream_status}},
                    retry_after=max(1, math.ceil(MODEL_GATE.status()['cooldown_seconds'])))
 
-    def forward(self, endpoint, method, path, body):
+    def forward(self, endpoint, method, path, body, native=None):
         gate = MODEL_GATE
         denied = gate.enter(self.disconnected)
         if denied == 'disconnected': return
@@ -318,6 +323,21 @@ class Handler(BaseHTTPRequestHandler):
                         return self.model_error('redirect_denied', response.status)
                     elif response.status == 409 or response.status >= 500:
                         return self.model_error('nonretryable_upstream_response', response.status)
+                    elif native is not None and response.status == 200:
+                        raw = response.read(ollama_adapter.MAX_RESPONSE + 1)
+                        if len(raw) > ollama_adapter.MAX_RESPONSE:
+                            raise ValueError('Native response too large')
+                        content_type, converted = ollama_adapter.finish(native, endpoint, raw)
+                        if self.disconnected(): return
+                        exposed = True
+                        self.send_response(200)
+                        self.send_header('Content-Type', content_type)
+                        self.send_header('Content-Length', str(len(converted)))
+                        self.send_header('Connection', 'close')
+                        self.end_headers()
+                        self.wfile.write(converted)
+                        self.wfile.flush()
+                        return
                     else:
                         exposed = True  # Never retry after response headers or stream bytes.
                         self.send_response(response.status)
@@ -332,6 +352,9 @@ class Handler(BaseHTTPRequestHandler):
                             self.wfile.write(chunk)
                             self.wfile.flush()
                         return
+                except (ValueError, KeyError, TypeError, AttributeError):
+                    gate.pause()
+                    return self.model_error('invalid_ollama_response')
                 except ssl.SSLError:
                     if exposed:
                         self.close_connection = True

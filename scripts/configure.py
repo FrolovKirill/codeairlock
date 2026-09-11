@@ -118,9 +118,23 @@ def generate(demo=False, project=None):
         llm, embed = endpoint(env, 'LLM'), endpoint(env, 'EMBED')
         if not embed['key'] and embed['url'] == llm['url']:
             embed['key'] = llm['key']  # One credential for the exact same API base URL.
+        protocol = env.get('LLM_PROTOCOL', 'openai')
+        if protocol not in ('openai', 'ollama'):
+            raise ValueError('LLM_PROTOCOL must be openai or ollama')
+        if protocol == 'ollama':
+            context, output, batch = (int(env.get(key, default)) for key, default in
+                                      [('LLM_CONTEXT', '8192'), ('LLM_MAX_OUTPUT', '512'), ('LLM_OLLAMA_BATCH', '32')])
+            if not 512 <= context <= 16384 or not 1 <= output <= 1024 or not 1 <= batch <= 64:
+                raise ValueError('Conservative Ollama profile requires context512..16384, output1..1024, batch1..64')
+            llm['ollama'] = {'context': context, 'max_output': output, 'batch': batch}
     gate = {'llm': llm, 'embed': embed}
     endpoints = [llm, embed]
-    if not demo and env.get('SEARCH_BASE_URL'):
+    from local_search import enabled as local_search_enabled, add_services as add_search_services
+    bundled_search = local_search_enabled(env, demo)
+    if bundled_search:
+        gate['search'] = {'url': 'http://searxng:8080/search', 'ip': NET+'6', 'key': ''}
+        endpoints.append(gate['search'])
+    elif not demo and env.get('SEARCH_BASE_URL'):
         gate['search'] = endpoint(env, 'SEARCH', model=False)
         endpoints.append(gate['search'])
     vols = []
@@ -145,7 +159,7 @@ def generate(demo=False, project=None):
             'models': {llm['model']: {'name': llm['model'], 'tool_call': True, 'limit': {'context': int(env.get('LLM_CONTEXT',32768)), 'output': int(env.get('LLM_MAX_OUTPUT',4096))}}}}},
         'indexing': {'enabled': False, 'provider': 'openai-compatible', 'model': embed['model'],
             'openai-compatible': {'baseUrl': 'http://172.30.88.3:8081/embed/v1', 'apiKey': 'internal-gateway'},
-            'vectorStore': 'lancedb', 'lancedb': {'directory': '/home/node/index'}, 'embeddingBatchSize': 16, 'searchMaxResults': 12, 'searchMinScore': 0.15 if demo else 0.4},
+            'vectorStore': 'lancedb', 'lancedb': {'directory': '/home/node/index'}, 'embeddingBatchSize': 1 if llm.get('ollama') else 16, 'searchMaxResults': 12, 'searchMinScore': 0.15 if demo else 0.4},
         'permission': {'read': 'allow', 'glob': 'allow', 'grep': 'allow', 'lsp': 'allow', 'semantic_search': 'allow', 'bash': 'ask', 'edit': 'deny' if access == 'read-only' else 'ask', 'webfetch': 'deny', 'websearch': 'deny', 'external_directory': 'ask'},
         'lsp': json.loads((ROOT / 'config/lsp.json').read_text()),
         'mcp': {'approved_search': {'type':'local', 'command':['python3','/opt/search_mcp.py'], 'enabled': bool(gate.get('search'))}},
@@ -220,6 +234,8 @@ def generate(demo=False, project=None):
                     f'{home}:/home/node']}
     if demo:
         services['mock'] = {**base,'user':'65534:65534','networks':{'private':{'ipv4_address':NET+'5'}},'command':['python3','/opt/mock_api.py']}
+    if bundled_search:
+        add_search_services(services, base, guard, RUNTIME, NET, write, rules)
     compose = {'name':'codeairlock','services':services,
         'networks':{'private':{'internal':True,'ipam':{'config':[{'subnet':NET+'0/24'}]}},'uplink':{},'ingress':{}},
         'volumes':{home:{}}}

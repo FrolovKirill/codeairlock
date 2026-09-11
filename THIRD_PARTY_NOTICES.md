@@ -64,3 +64,24 @@ and code-server third-party notices shipped in their artifacts. Apache-2.0 works
 may require their license and applicable NOTICE content. The repository's
 `THIRD_PARTY_NOTICES.md` is supplementary and does not substitute for notices
 bundled by an upstream project.
+
+## Optional bundled search
+
+- SearXNG `2026.9.11-61d660276`: the unmodified official image is pinned to
+  `sha256:e084201aa606fafce2151c8dc2844c9c3309025e90fbe7163b4f5e5183e474f0`.
+  Its OCI metadata identifies **AGPL-3.0-or-later**, upstream source revision
+  `61d660276f1288e7d512e8d8da46cb8442728454`, and
+  [upstream source](https://github.com/searxng/searxng/tree/61d660276f1288e7d512e8d8da46cb8442728454).
+  The repository contains generated configuration, not a vendored SearXNG fork.
+- Squid is installed from Debian Bookworm repositories by
+  `deploy/search-proxy.Dockerfile`. The inspected build resolved
+  `5.7-2+deb12u6`; package resolution is not locked. Squid and its included code
+  carry GPL and additional third-party notices. Preserve and review
+  `/usr/share/doc/squid/copyright`, upstream COPYING/CONTRIBUTORS and the copyright
+  files of its dependencies when distributing an image. The MIT license for this
+  repository does not relicense SearXNG or Squid.
+
+No built search images are published by this repository. If you modify or
+redistribute those components, review their source-availability and notice
+requirements for that exact distribution. Do not assume the wrapper's license
+replaces upstream obligations.

@@ -22,12 +22,17 @@ checks={
  'ui': [('1.1.1.1',443),('127.0.0.11',53),('172.30.88.3',8081)],
 }
 passed=True
+deployment=json.loads((root/'runtime/compose.json').read_text())
+if 'searxng' in deployment['services']:
+ checks['workstation'] += [('172.30.88.6',8080),('172.30.88.7',3128)]
+ checks['gateway'] += [('172.30.88.7',3128)]
+ checks['search-net'] = [('1.1.1.1',443),('127.0.0.11',53),('172.30.88.3',8081),('172.30.88.1',6090)]
 for service,targets in checks.items():
  out=subprocess.run([*compose,'exec','-T',service,'python3','-c',program,json.dumps(targets)],check=True,capture_output=True,text=True)
  result=json.loads(out.stdout)
  ok=all(result);passed=passed and ok
  print(('PASS ' if ok else 'FAIL ')+service+': all disallowed outbound connections blocked')
-for service in ['workstation-net','gateway-net','ui-net']:
+for service in ['workstation-net','gateway-net','ui-net'] + (['search-net'] if 'searxng' in deployment['services'] else []):
  out=subprocess.run([*compose,'exec','-T',service,'nft','-j','list','table','inet','private_env'],check=True,capture_output=True,text=True)
  entries=json.loads(out.stdout)['nftables']
  chains={x['chain']['name']:x['chain'] for x in entries if 'chain' in x}

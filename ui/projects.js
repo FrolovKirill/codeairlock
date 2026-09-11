@@ -10,10 +10,11 @@ function consumeToken() {
   }
 }
 consumeToken();
-let state = null, desktopProject = null, renderingKey = '', refreshBusy = false;
+let state = null, desktopProject = null, renderingKey = '', refreshBusy = false, quitting = false;
 const accessChoices = new Map();
 const empty = $('desktop').firstElementChild.cloneNode(true);
 async function api(path, body) {
+  if (quitting && path !== '/api/quit') throw new Error('The environment is shutting down.');
   const response = await fetch(path, {method: body === undefined ? 'GET' : 'POST',
     headers: {'Authorization': 'Bearer ' + token, ...(body === undefined ? {} : {'Content-Type': 'application/json'})},
     body: body === undefined ? undefined : JSON.stringify(body)});
@@ -65,10 +66,12 @@ async function openProject(id, access, reindex) {
   catch (e) { error(e.message); }
 }
 async function refresh() {
-  if (refreshBusy) return;
+  if (refreshBusy || quitting) return;
   refreshBusy = true;
   try {
-    state = await api('/api/state'); $('connection').hidden = true;
+    const updated = await api('/api/state');
+    if (quitting) return;
+    state = updated; $('connection').hidden = true;
     $('status').textContent = state.busy ? state.phase : (state.error ? 'Needs attention' : state.active ? 'Ready' : 'Stopped');
     $('stop').disabled = !state.active && !state.busy;
     $('stop').textContent = state.busy ? 'Cancel & stop' : 'Stop environment';
@@ -85,7 +88,7 @@ async function refresh() {
       }
       $('desktop-tools').hidden = false;
     } else clearDesktop();
-  } catch (e) { $('status').textContent = 'Disconnected'; $('connection').hidden = false; error(e.message); clearDesktop(); }
+  } catch (e) { if (!quitting) { $('status').textContent = 'Disconnected'; $('connection').hidden = false; error(e.message); clearDesktop(); } }
   finally { refreshBusy = false; }
 }
 $('add-toggle').onclick = () => { $('add-form').hidden = !$('add-form').hidden; if (!$('add-form').hidden) $('name').focus(); };
@@ -101,6 +104,27 @@ $('browse').onclick = async () => {
   catch (e) { error(e.message); } finally { $('browse').disabled = false; }
 };
 $('stop').onclick = async () => { try { clearDesktop(); await api('/api/stop', {}); await refresh(); } catch (e) { error(e.message); } };
+$('quit').onclick = async () => {
+  if (quitting) return;
+  quitting = true; clearDesktop(); error(''); $('connection').hidden = true;
+  document.querySelectorAll('button, input, select').forEach(el => el.disabled = true);
+  $('status').textContent = 'Shutting down…';
+  try {
+    const result = await api('/api/quit', {});
+    if (result.stopped !== true) throw new Error('Shutdown was not confirmed.');
+    clearInterval(refreshTimer); sessionStorage.removeItem('manager-token'); token = '';
+    $('status').textContent = 'Shut down'; $('workspace-title').textContent = 'Everything is stopped';
+    const message = document.createElement('div'); message.className = 'empty';
+    const title = document.createElement('h3'); title.textContent = 'Sessions and indexes are saved';
+    const detail = document.createElement('p'); detail.textContent = 'The workspace, search services and local manager have stopped. You can close this tab. To start again, run ./codeairlock projects.';
+    message.append(title, detail); $('desktop').replaceChildren(message);
+    $('search-requests').replaceChildren(); $('search-status').textContent = '';
+  } catch (e) {
+    quitting = false; renderingKey = '';
+    document.querySelectorAll('button, input, select').forEach(el => el.disabled = false);
+    await refresh(); error(e.message + ' Shutdown is not confirmed; check Docker before retrying.');
+  }
+};
 $('password').onclick = async () => {
   const id = state.active;
   try { const result = await api('/api/password', {id});
@@ -108,4 +132,37 @@ $('password').onclick = async () => {
   } catch (e) { error(e.message); }
 };
 window.addEventListener('hashchange', () => { consumeToken(); refresh(); });
-refresh(); setInterval(refresh, 2000);
+async function refreshSearches() {
+  $('search-refresh').disabled = true;
+  try {
+    const data = await api('/api/search');
+    $('search-requests').replaceChildren();
+    $('search-status').textContent = data.requests.length ? 'Review the exact query before approving.' : 'No pending searches.';
+    for (const item of data.requests) {
+      const card = document.createElement('article'); card.className = 'project';
+      const query = document.createElement('pre'); query.className = 'search-query';
+      // Show invisible and non-ASCII characters explicitly; never render HTML.
+      query.textContent = JSON.stringify(item.query).replace(/[\u007f-\uffff]/g,
+        c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));
+      card.append(query);
+      for (const action of ['approve', 'deny']) {
+        const button = document.createElement('button');
+        button.textContent = action === 'approve' ? 'Approve this one query' : 'Deny';
+        if (action === 'deny') button.className = 'quiet';
+        button.onclick = async () => {
+          card.querySelectorAll('button').forEach(b => b.disabled = true);
+          $('search-status').textContent = action === 'approve' ? 'Sending the approved query…' : 'Denying…';
+          try {
+            const result = await api('/api/search', {action, id: item.id, query: item.query});
+            card.remove(); $('search-status').textContent = 'Request: ' + result.status + '. Tell the agent to read its search result.';
+          } catch (e) { $('search-status').textContent = e.message + ' Refresh to check the outcome.'; }
+        };
+        card.append(button);
+      }
+      $('search-requests').append(card);
+    }
+  } catch (e) { $('search-status').textContent = e.message; }
+  finally { $('search-refresh').disabled = false; }
+}
+$('search-refresh').onclick = refreshSearches;
+refresh(); const refreshTimer = setInterval(refresh, 2000);

@@ -12,8 +12,8 @@ source repository with configurable write access while sharply limiting network 
 - an allowlisted inference gateway; and
 - separate nftables network namespaces with default-deny policies.
 
-The model and embedding services are supplied by the operator. They must expose
-OpenAI-compatible `/v1` APIs. The normal configuration accepts private RFC1918
+The model and embedding services are supplied by the operator. They normally expose
+OpenAI-compatible `/v1` APIs; an optional native Ollama chat adapter is also available. The normal configuration accepts private RFC1918
 addresses. A trusted, self-hosted public model endpoint can be allowed explicitly
 over HTTPS port 443 by repeating its exact pinned IP in the matching
 `*_TRUSTED_PUBLIC_IP` setting.
@@ -43,11 +43,11 @@ noVNC/websockify namespace ──► workstation VNC
                                       fixed-route gateway
                                        ├─ pinned LLM IP
                                        ├─ pinned embedding IP
-                                       └─ optional internal SearxNG IP
+                                       └─ approved query → SearxNG → domain-restricted Squid → search engines
 ```
 
 Every service has its own container, or shares a network namespace with a small
-nftables guard container. The policies block DNS, IPv6, Docker-host access,
+nftables guard container. The agent, gateway and display policies block DNS, IPv6, Docker-host access,
 cloud-metadata addresses, and arbitrary public egress. The gateway accepts only
 the exact chat-completions and embeddings routes, rejects caller-selected models
 and remote media URLs, strips caller headers, refuses redirects, and does not log
@@ -169,6 +169,28 @@ operate and trust. Certificate verification remains enabled. Set `CA_BUNDLE` to
 an absolute PEM bundle path for a private CA. IP changes require regenerating the
 deployment with the new exact value.
 
+### Optional native Ollama chat adapter
+
+Use this mode when you need resource limits sent to Ollama's native `/api/chat`
+route, instead of relying on defaults behind its OpenAI-compatible API:
+
+```dotenv
+LLM_PROTOCOL=ollama
+LLM_CONTEXT=8192
+LLM_MAX_OUTPUT=512
+LLM_OLLAMA_BATCH=32
+```
+
+Keep `LLM_BASE_URL` ending in `/v1`; the gateway derives the corresponding
+`/api/chat` route, including any deployment prefix. Embeddings still use the
+OpenAI-compatible API. Only the operator can select this mode. The adapter bounds
+context to 512–16384, output to 1–1024 and batch to 1–64; changing only
+`LLM_PROTOCOL` while leaving the example's larger OpenAI limits will fail validation.
+It sends `think=false` and `keep_alive=2m`. These limits do not guarantee that a
+particular model fits your server. Tool calls and JSON responses are translated;
+streaming clients receive buffered SSE after generation completes, not live token
+streaming. `LLM_PROTOCOL=openai` remains the default.
+
 ## Projects, sessions and the local UI
 
 After configuring model services, run:
@@ -228,6 +250,13 @@ shows only project metadata and the noVNC pixel desktop. The VNC password is
 separate and stable per project; use **Show desktop password** if prompted. Desktop
 connections are removed while switching, and project-specific VNC passwords prevent
 an old tab from silently authenticating to another project's desktop.
+
+**Shut down & exit** cancels an in-progress manager operation, stops the entire
+owned Compose stack (including search), verifies that its containers are gone,
+and exits the local manager. Sessions, indexes and registered folders are kept.
+A failed shutdown leaves the manager available to show the error and retry.
+The page stops polling and explains how to restart with `./codeairlock projects`.
+Docker Desktop, unrelated Compose projects and remote model services are not stopped.
 
 **Stop environment** stops containers without deleting data; **Cancel & stop**
 cancels a pending open/index operation. The UI and CLI serialize lifecycle
@@ -291,10 +320,31 @@ and external-directory access require UI approval. A shell approval grants code
 execution inside the workstation container, including repository writes when
 `read-write` is selected. The persistent Kilo home volume is writable in both modes.
 
-Optional web search uses a separate local MCP tool and an internal SearxNG JSON
-`/search` endpoint. Configure both `SEARCH_BASE_URL` and its pinned RFC1918
-`SEARCH_IP`. The agent can only propose a query. The operator must inspect and
-approve that exact query through the host command:
+Web search is opt-in and uses a separate MCP tool. To run the bundled SearxNG:
+
+```sh
+./codeairlock search-build
+# Set SEARXNG_ENABLED=true in .env, then open a project or run:
+./codeairlock up
+```
+
+The build pulls a digest-pinned official SearxNG image and builds a small Squid
+image from a pinned Debian-based image. Downloads/builds require host internet
+access. Normal startup uses local images with `--pull never`. Bundled mode derives
+its internal URL/IP automatically; leave `SEARCH_BASE_URL` and `SEARCH_IP` empty.
+The search services start and stop with the workspace. The synthetic `demo` never
+enables search, even when the switch is set.
+
+Alternatively leave `SEARXNG_ENABLED=false` and configure `SEARCH_BASE_URL` plus
+`SEARCH_IP` for your own internal RFC1918 SearxNG `/search` endpoint. Enable JSON
+in that instance's `search.formats`. The external instance's egress restrictions
+are its operator's responsibility; bundled Squid policy does not apply to it.
+
+The agent can only propose a query. In the host project manager, click **Review
+pending searches**, read the exact query, then choose **Approve this one query**
+or **Deny**. Non-ASCII and invisible characters are escaped to expose misleading
+text. Tell the agent to read its result after approval. The same controls are
+available from the host terminal:
 
 ```sh
 ./codeairlock search list
@@ -303,10 +353,29 @@ approve that exact query through the host command:
 ```
 
 Approval is one-time. Queries expire after ten minutes, cannot be changed during
-approval, and are sent at most once. Search results are reduced to title, URL, and
-text snippets; result URLs are not fetched. A failed search requires a new proposal
-and a new approval. Search has not been validated against a real SearxNG instance
-in this release.
+approval, and trigger at most one gateway request to SearxNG. A search can query
+both Brave and DuckDuckGo and involve multiple engine HTTP requests. A failed
+search requires a new proposal and approval. The approved text is disclosed to
+those engines; approval does not anonymize it. Results contain up to ten titles,
+URLs and snippets. Result pages, images and other assets are not fetched.
+
+Bundled SearxNG has no repository/history/model-key mount, no published host port,
+and no direct internet or DNS access. Its nftables namespace allows only the
+approval gateway inbound and Squid outbound. Plugins, autocomplete and image proxy
+are disabled. Squid accepts only SearxNG's source IP, CONNECT on port 443, and these
+exact hostnames: `search.brave.com`, `cdn.search.brave.com`, `duckduckgo.com`,
+`html.duckduckgo.com`, `lite.duckduckgo.com`, `links.duckduckgo.com`. Arbitrary
+subdomains and private/special destination addresses are denied. Both applications
+run without root, with dropped capabilities, read-only roots, temporary writable
+storage and disabled container/query logs.
+
+Squid itself has internet and DNS access and is part of the trusted boundary;
+its ACLs enforce destination domains, while SearxNG's firewall prevents bypassing
+it. The agent and gateway cannot connect to Squid. SearxNG may contact allowed
+engine domains during initialization without a user query. Search engine changes
+or anti-bot measures can break retrieval; the allowlist intentionally fails closed.
+See the [SearxNG container documentation](https://docs.searxng.org/admin/installation-docker.html)
+and [outgoing proxy settings](https://docs.searxng.org/admin/settings/settings_outgoing.html).
 
 ## Retry and overload behavior
 
@@ -349,12 +418,15 @@ prompt content.
 | `REPO_PATH` | Legacy one-time project import; use the project manager for folders. |
 | `REPO_ACCESS` | Legacy one-time access import; project-specific mode is saved in the registry. Also sets demo access if explicitly present. |
 | `UI_PORT` | Localhost noVNC port, from 1024 through 65535; default `6080`. |
-| `SEARCH_BASE_URL`, `SEARCH_IP` | Optional internal SearxNG JSON endpoint and pinned RFC1918 address. Both are needed to enable search. |
+| `SEARXNG_ENABLED` | Opt into bundled SearxNG and its restricted Squid proxy. Default `false`. |
+| `SEARCH_BASE_URL`, `SEARCH_IP` | Alternative external internal-network SearxNG JSON endpoint; leave empty in bundled mode. |
+| `LLM_PROTOCOL`, `LLM_OLLAMA_BATCH` | Optional native Ollama adapter and bounded batch size; default protocol is `openai`. |
 
 ## Operator commands
 
 ```text
 projects                 open the local project manager (default port 6090)
+search-build             fetch pinned SearxNG and build its restricted Squid proxy
 init                     create .env from the safe example
 fetch                    download and verify pinned ARM64 release artifacts
 build                    fetch artifacts and build both local images
@@ -415,3 +487,14 @@ saved user/assistant messages survived switching and a full container stop/recre
 Chromium stale singleton locks are cleared at startup so its persistent profile
 can reopen after a container's hostname/PID changes. No real repository or model
 was used for those cross-project tests.
+
+The bundled-search/shutdown update passed 67 offline tests, covering native Ollama limits,
+search configuration, host approvals, complete shutdown, failed shutdown retry,
+and lifecycle locking. Local integration used one explicitly approved public
+query, returned ten results, observed no proxy traffic from its pending proposal,
+and rejected a repeated approval. Direct SearxNG internet/DNS and arbitrary Squid
+destinations were rejected. The real MCP proposal/host denial/result path and the
+approval UI were checked separately with synthetic inputs. Full shutdown removed
+the owned containers, closed UI/manager ports and retained persistent volumes.
+These observations are from macOS ARM64 and do not establish portability to every
+Docker installation or continuing availability of external search engines.

@@ -43,7 +43,7 @@ def start(demo=False, reindex=False, project=None):
             from projects import validate_path
             if validate_path(project['path']) != project['path']:
                 raise ValueError('Project path changed before mounting; register its new location.')
-        compose('up', '-d', '--pull', 'never')
+        compose('up', '-d', '--pull', 'never', '--wait', '--wait-timeout', '90')
         if project and not demo:
             write(RUNTIME / 'active-project.json', {'id': project['id']}, 0o600)
         state = 'fresh index selected; run index before chat' if result['fresh'] else 'existing index selected'

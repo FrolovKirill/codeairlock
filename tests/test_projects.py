@@ -163,8 +163,88 @@ class ManagerHTTPTests(unittest.TestCase):
         self.assertEqual(self.request('/api/open','POST',{'id':[], 'access':'read-only'})[0],400)
         self.assertEqual(self.request('/api/open','POST',{'id':'a'*32,'reindex':'yes'})[0],400)
 
+    def test_search_requires_authenticated_exact_decision(self):
+        body = {'id': 'a'*32, 'query': 'Synthetic query', 'action': 'approve'}
+        with patch.object(manager, 'search_control', return_value={'status': 'done'}) as control:
+            for headers in ({'Authorization': ''}, {'Origin': 'https://evil.example'}, {'Host': 'evil.example'}):
+                self.assertEqual(self.request('/api/search', 'POST', body, **headers)[0], 403)
+                self.assertEqual(self.request('/api/search', **headers)[0], 403)
+            for invalid in ({**body, 'all': True}, {**body, 'action': 'auto'}, {'id': 'a'*32}):
+                self.assertEqual(self.request('/api/search', 'POST', invalid)[0], 400)
+            control.assert_not_called()
+            self.assertEqual(self.request('/api/search', 'POST', body)[0], 200)
+            control.assert_called_once_with('approve', 'a'*32, 'Synthetic query')
+
+    def test_quit_is_authenticated_and_does_not_accept_arbitrary_targets(self):
+        from unittest.mock import Mock
+        self.server.operations.quit_environment = Mock()
+        for headers in ({'Authorization': ''}, {'Origin': 'https://evil.example'}, {'Host': 'evil.example'}):
+            self.assertEqual(self.request('/api/quit', 'POST', {}, **headers)[0], 403)
+        self.assertEqual(self.request('/api/quit', 'POST', {'project': 'another-stack'})[0], 400)
+        self.server.operations.quit_environment.assert_not_called()
+
 
 class OperationTests(unittest.TestCase):
+    def test_quit_stops_all_services_and_keeps_volumes_under_lock(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); (root/'compose.json').write_text('{}')
+            (root/'active-project.json').write_text('{}')
+            with patch.object(manager, 'RUNTIME', root), patch.object(projects, 'RUNTIME', root):
+                operations = manager.Operations()
+                def run(args, **kwargs):
+                    with self.assertRaises(BlockingIOError):
+                        with projects.locked('operation', blocking=False): pass
+                    self.assertNotIn('--volumes', args)
+                    return subprocess.CompletedProcess(args, 0, '')
+                with patch.object(manager.subprocess, 'run', side_effect=run) as process:
+                    operations.quit_environment()
+                    self.assertEqual(process.call_args_list[0].args[0][-2:], ['down', '--remove-orphans'])
+                    self.assertEqual(process.call_args_list[1].args[0][-3:], ['ps', '--all', '--quiet'])
+                self.assertTrue(operations.quitting)
+                self.assertFalse((root/'active-project.json').exists())
+                with self.assertRaisesRegex(RuntimeError, 'shutting down'):
+                    operations.launch('a'*32, 'read-only')
+
+    def test_quit_failure_keeps_manager_retryable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); (root/'compose.json').write_text('{}')
+            with patch.object(manager, 'RUNTIME', root), patch.object(projects, 'RUNTIME', root):
+                operations = manager.Operations()
+                with patch.object(manager.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1)):
+                    with self.assertRaisesRegex(RuntimeError, 'Shutdown failed'): operations.quit_environment()
+                self.assertFalse(operations.quitting)
+                with projects.locked('operation', blocking=False):
+                    with self.assertRaises(BlockingIOError): operations.quit_environment()
+                self.assertFalse(operations.quitting)
+
+    def test_quit_missing_compose_checks_owned_containers(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            with patch.object(manager, 'RUNTIME', root), patch.object(projects, 'RUNTIME', root):
+                operations = manager.Operations()
+                with patch.object(manager.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, 'remaining-id\n')) as run:
+                    with self.assertRaisesRegex(RuntimeError, 'compose.json is missing'):
+                        operations.quit_environment()
+                    self.assertIn('label=com.docker.compose.project='+manager.CLI.name, run.call_args.args[0])
+                self.assertFalse(operations.quitting)
+                with patch.object(manager.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '')):
+                    operations.quit_environment()
+                self.assertTrue(operations.quitting)
+
+    def test_quit_cancels_and_joins_own_operation_before_down(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp); (root/'compose.json').write_text('{}')
+            with patch.object(manager, 'RUNTIME', root), patch.object(projects, 'RUNTIME', root):
+                from unittest.mock import Mock
+                operations = manager.Operations(); operations.busy = True
+                operations.process = SimpleNamespace(pid=12345, poll=lambda: None)
+                operations.thread = Mock(); operations.thread.is_alive.side_effect = [True, False]
+                with patch.object(manager.os, 'killpg') as kill, \
+                     patch.object(manager.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '')):
+                    operations.quit_environment()
+                kill.assert_called_once_with(12345, manager.signal.SIGINT)
+                operations.thread.join.assert_called_once_with(timeout=120)
+
     def test_open_and_index_are_one_cli_transaction(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(manager, 'RUNTIME', pathlib.Path(temp)):
             operations = manager.Operations()

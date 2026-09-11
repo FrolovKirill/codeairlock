@@ -3,7 +3,7 @@
 **Isolated code analysis with self-hosted AI.**
 
 CodeAirlock is a small Docker-based harness for using a pinned Kilo Code build on a
-read-only source repository while sharply limiting network paths. It combines:
+source repository with configurable write access while sharply limiting network paths. It combines:
 
 - Kilo Code 7.5.16 and code-server 4.136.2;
 - local Python and TypeScript language servers;
@@ -34,7 +34,7 @@ host browser
     ▼
 noVNC/websockify namespace ──► workstation VNC
                                   │
-                                  ├─ read-only /workspace repository
+                                  ├─ /workspace repository (read-only by default)
                                   ├─ Kilo + code-server + LSP + LanceDB
                                   ├─ Chromium (no inner Chromium sandbox)
                                   └─ only allowed TCP destination
@@ -53,7 +53,10 @@ the exact chat-completions and embeddings routes, rejects caller-selected models
 and remote media URLs, strips caller headers, refuses redirects, and does not log
 prompts or response bodies.
 
-The repository is mounted read-only in the workstation. Kilo may read it and send
+The repository is mounted read-only by default. `REPO_ACCESS=read-write` permits
+writes to the host repository and sets Kilo edits to require approval. An approved
+shell command can also write in that mode; edit approval is not a filesystem
+security boundary. Network restrictions are identical in both modes. Kilo may read it and send
 relevant text to the configured model. Semantic indexing sends repository chunks
 to the configured embedding service. Those two servers are therefore inside the
 trusted computing base; network isolation cannot hide data from an endpoint that
@@ -145,7 +148,7 @@ EMBED_BASE_URL=http://embeddings.internal:8080/v1
 EMBED_IP=10.0.0.11
 EMBED_MODEL=your-embedding-model
 EMBED_API_KEY=
-EMBED_DIMENSION=768
+EMBED_DIMENSION=
 ```
 
 The hostname is preserved for the HTTP `Host` header and TLS SNI, while the socket
@@ -166,7 +169,10 @@ operate and trust. Certificate verification remains enabled. Set `CA_BUNDLE` to
 an absolute PEM bundle path for a private CA. IP changes require regenerating the
 deployment with the new exact value.
 
-Set `REPO_PATH` to the repository to inspect. The mount is read-only. The path must
+Set `REPO_PATH` to the repository. Set `REPO_ACCESS=read-only` (the default) for
+analysis, or `REPO_ACCESS=read-write` to allow edits with Kilo approval.
+This setting also applies to the bundled repository when running `demo`. Restart with
+`./codeairlock up` after changing settings. The path must
 not contain this CodeAirlock directory because that would expose `.env` and runtime
 credentials to the workstation.
 
@@ -177,6 +183,35 @@ Start the connected environment and index before opening a chat:
 ./codeairlock check
 ./codeairlock index
 ```
+
+At each `up`, a short fixed synthetic string is sent to your embedding endpoint
+through the isolated gateway. A one-shot helper shares the workstation firewall
+but has no repository mount. The returned vector length configures Kilo and
+LanceDB automatically. No external discovery service or direct host HTTP request
+is used. Failed detection stops startup before the editor/agent starts.
+
+Leave `EMBED_DIMENSION` empty or omit it. An optional positive value asserts the
+expected length; it does not resize vectors, and a mismatch stops startup.
+
+Each repository has an index profile in the persistent home volume. The profile
+records the embedding endpoint, pinned IP, model name, optional `EMBED_REVISION`, and detected
+dimension. Changing any of these stops startup, including switching between two
+models with the same dimension. To explicitly build a fresh index:
+
+```sh
+./codeairlock up --reindex
+./codeairlock index
+```
+
+A fresh index directory is selected; old indexes and chat history are preserved.
+After pulling this update, rebuild images once with `./codeairlock build`.
+The first launch after upgrading from the original release also selects a fresh
+index because the legacy index has no verified model identity. Subsequent starts
+reuse the compatible index. Changing only an API key does not force a rebuild. A changed pinned IP does: it
+may point at a different backend even when the URL and model name stay the same. If weights are replaced behind the same endpoint/model name, change
+`EMBED_REVISION` yourself: an embeddings response cannot reliably identify weights.
+Repository identity uses the resolved host path; moving the repository selects a
+separate index. Replacing its contents at the same path should use `up --reindex`.
 
 `index` starts Kilo's loopback-only indexing service if needed, reports only state
 and counts, waits for `Complete`, and sends no chat request. Wait for that success
@@ -191,10 +226,11 @@ clean Linux installation is claimed as tested here.
 ## UI permissions and approved search
 
 Generated Kilo policy allows repository reads, globbing, grep, LSP, and semantic
-search. File edits and Kilo's built-in web fetch/search are denied. Shell commands
+search. File edits are denied in `read-only` mode and require approval in
+`read-write` mode. Kilo's built-in web fetch/search remain denied. Shell commands
 and external-directory access require UI approval. A shell approval grants code
-execution inside the workstation container, where the repository is still mounted
-read-only but the persistent Kilo home volume is writable.
+execution inside the workstation container, including repository writes when
+`read-write` is selected. The persistent Kilo home volume is writable in both modes.
 
 Optional web search uses a separate local MCP tool and an internal SearxNG JSON
 `/search` endpoint. Configure both `SEARCH_BASE_URL` and its pinned RFC1918
@@ -248,9 +284,11 @@ prompt content.
 | `LLM_MODEL`, `EMBED_MODEL` | Exact upstream model names accepted by the gateway. |
 | `LLM_API_KEY`, `EMBED_API_KEY` | Optional credentials. The embedding key inherits the LLM key only when both base URLs are identical. |
 | `LLM_CONTEXT`, `LLM_MAX_OUTPUT` | Context and output limits advertised to Kilo. |
-| `EMBED_DIMENSION` | Positive embedding vector length; it must match the embedding service. |
+| `EMBED_DIMENSION` | Optional expected vector length. Empty/omitted means automatic detection; mismatch stops startup. |
+| `EMBED_REVISION` | Optional operator version label; change when weights change behind the same model name. |
 | `CA_BUNDLE` | Optional absolute path to a PEM CA bundle copied into private runtime state. |
-| `REPO_PATH` | Host repository mounted read-only at `/workspace`. |
+| `REPO_PATH` | Host repository mounted at `/workspace`. |
+| `REPO_ACCESS` | `read-only` (default) or `read-write`; switches both the mount and Kilo edit policy. |
 | `UI_PORT` | Localhost noVNC port, from 1024 through 65535; default `6080`. |
 | `SEARCH_BASE_URL`, `SEARCH_IP` | Optional internal SearxNG JSON endpoint and pinned RFC1918 address. Both are needed to enable search. |
 
@@ -261,7 +299,8 @@ init                     create .env from the safe example
 fetch                    download and verify pinned ARM64 release artifacts
 build                    fetch artifacts and build both local images
 demo                     start the synthetic, network-isolated demo
-up                       start with configured trusted endpoints
+up                       detect embeddings, validate index identity, then start
+up --reindex             select a fresh index, preserving old indexes and sessions
 down                     stop this public-release Compose project
 status                   show service status
 check                    run fixed network and configuration probes
@@ -297,3 +336,12 @@ See [SECURITY.md](SECURITY.md) for reporting and operational guidance,
 [CONTRIBUTING.md](CONTRIBUTING.md) for public-copy rules, and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for licensing and redistribution
 notes.
+
+Startup regression coverage also includes automatic vector-length detection,
+invalid embedding responses, optional dimension assertions, model/IP/revision
+changes, index preservation, access-mode generation, and interrupted startup.
+On September 11, 2026, 35 offline tests passed. Docker integration on macOS ARM64
+verified actual read-only write rejection and successful read-write operations, compatible
+index reuse after restart, startup refusal on a same-dimension model change, and
+successful Kilo indexing into a fresh directory after `demo --reindex`. Integration
+used only the included synthetic repository and synthetic model API.

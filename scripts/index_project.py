@@ -5,17 +5,18 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROGRAM = r'''
 import json,pathlib,socket,subprocess,time,urllib.request
-BASE='http://127.0.0.1:4096'
+# Reserve a separate loopback port: the editor extension owns/authenticates 4096.
+BASE='http://127.0.0.1:49161'
 def get(path):
     with urllib.request.urlopen(BASE+path,timeout=15) as response:
         return json.load(response)
 
 # This loopback port is not published outside the workstation namespace.
 sock=socket.socket();sock.settimeout(1)
-listening=sock.connect_ex(('127.0.0.1',4096))==0;sock.close()
+listening=sock.connect_ex(('127.0.0.1',49161))==0;sock.close()
 if not listening:
     with open('/tmp/codeairlock-index-server.log','ab') as log:
-        subprocess.Popen(['kilo','serve','--hostname','127.0.0.1','--port','4096'],
+        subprocess.Popen(['kilo','serve','--hostname','127.0.0.1','--port','49161'],
                          cwd='/workspace',stdin=subprocess.DEVNULL,stdout=log,stderr=log,
                          start_new_session=True)
     deadline=time.monotonic()+30

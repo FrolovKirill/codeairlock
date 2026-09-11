@@ -7,6 +7,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 from configure import generate, envfile
+from startup import start
 
 def run(args): return subprocess.run(args, cwd=ROOT, check=True)
 def compose(*args): return run(['docker','compose','-f',str(ROOT/'runtime/compose.json'),*args])
@@ -19,9 +20,9 @@ elif cmd == 'build':
     run(['docker','build','-f','deploy/infra.Dockerfile','-t','codeairlock-infra:0.1.0','.'])
     run(['docker','build','-f','deploy/workstation.Dockerfile','-t','codeairlock-workstation:0.1.0','.'])
 elif cmd in ('up','demo'):
-    if (ROOT/'runtime/compose.json').exists(): compose('down','--remove-orphans')
-    generate(demo=cmd=='demo')
-    compose('up','-d','--pull','never')
+    if any(arg != '--reindex' for arg in sys.argv[2:]):
+        raise SystemExit('Only --reindex is accepted after up/demo')
+    start(demo=cmd=='demo', reindex='--reindex' in sys.argv[2:])
 elif cmd == 'down': compose('down','--remove-orphans')
 elif cmd == 'fetch': run([sys.executable,'scripts/fetch_assets.py'])
 elif cmd == 'status': compose('ps')
@@ -37,4 +38,5 @@ elif cmd == 'model-status': compose('exec','-T','gateway','python3','-c',
     'import sys,json; sys.path.insert(0,"/opt"); from search_admin import call; print(json.dumps(call("GET","/model-status"),indent=2))')
 elif cmd == 'logs': compose('logs','--tail','80',*(sys.argv[2:] or ['workstation']))
 else:
+    print('up/demo --reindex: explicitly create a fresh semantic index; preserve sessions and old indexes.')
     print('Usage: ./codeairlock init|fetch|build|demo|up|down|status|check|audit|index|model-status|verify-demo|verify-connected-demo|shell|logs [service]|search list|search approve ID|search deny ID')

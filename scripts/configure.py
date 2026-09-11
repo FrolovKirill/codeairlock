@@ -1,4 +1,5 @@
 """Generate deployment from operator settings; never read repository contents."""
+import hashlib
 import ipaddress
 import json
 import os
@@ -100,16 +101,19 @@ def generate(demo=False):
     if not repo.is_dir(): raise ValueError('REPO_PATH is not an existing directory')
     if repo == ROOT or repo in ROOT.parents:
         raise ValueError('Repository mount must not include this deployment, its .env or runtime secrets')
+    access = env.get('REPO_ACCESS', 'read-only')
+    if access not in ('read-only', 'read-write'):
+        raise ValueError('REPO_ACCESS must be read-only or read-write')
+    expected = env.get('EMBED_DIMENSION', '').strip() if not demo else ''
+    if expected and (not expected.isdecimal() or int(expected) <= 0):
+        raise ValueError('EMBED_DIMENSION must be empty (automatic) or a positive integer')
     if demo:
         llm = {'url': 'http://synthetic:9000/v1', 'ip': NET+'5', 'model': 'demo-llm', 'key': ''}
         embed = {'url': 'http://synthetic:9000/v1', 'ip': NET+'5', 'model': 'demo-embed', 'key': ''}
-        dimension = 32
     else:
         llm, embed = endpoint(env, 'LLM'), endpoint(env, 'EMBED')
         if not embed['key'] and embed['url'] == llm['url']:
             embed['key'] = llm['key']  # One credential for the exact same API base URL.
-        dimension = int(env['EMBED_DIMENSION'])
-        if dimension <= 0: raise ValueError('EMBED_DIMENSION must be positive')
     gate = {'llm': llm, 'embed': embed}
     endpoints = [llm, embed]
     if not demo and env.get('SEARCH_BASE_URL'):
@@ -135,14 +139,22 @@ def generate(demo=False):
         'provider': {'internal': {'npm': '@ai-sdk/openai-compatible', 'name': 'Internal LLM only',
             'options': {'baseURL': 'http://172.30.88.3:8081/llm/v1', 'apiKey': 'internal-gateway'},
             'models': {llm['model']: {'name': llm['model'], 'tool_call': True, 'limit': {'context': int(env.get('LLM_CONTEXT',32768)), 'output': int(env.get('LLM_MAX_OUTPUT',4096))}}}}},
-        'indexing': {'enabled': True, 'provider': 'openai-compatible', 'model': embed['model'], 'dimension': dimension,
+        'indexing': {'enabled': False, 'provider': 'openai-compatible', 'model': embed['model'],
             'openai-compatible': {'baseUrl': 'http://172.30.88.3:8081/embed/v1', 'apiKey': 'internal-gateway'},
             'vectorStore': 'lancedb', 'lancedb': {'directory': '/home/node/index'}, 'embeddingBatchSize': 16, 'searchMaxResults': 12, 'searchMinScore': 0.15 if demo else 0.4},
-        'permission': {'read': 'allow', 'glob': 'allow', 'grep': 'allow', 'lsp': 'allow', 'semantic_search': 'allow', 'bash': 'ask', 'edit': 'deny', 'webfetch': 'deny', 'websearch': 'deny', 'external_directory': 'ask'},
+        'permission': {'read': 'allow', 'glob': 'allow', 'grep': 'allow', 'lsp': 'allow', 'semantic_search': 'allow', 'bash': 'ask', 'edit': 'deny' if access == 'read-only' else 'ask', 'webfetch': 'deny', 'websearch': 'deny', 'external_directory': 'ask'},
         'lsp': json.loads((ROOT / 'config/lsp.json').read_text()),
         'mcp': {'approved_search': {'type':'local', 'command':['python3','/opt/search_mcp.py'], 'enabled': bool(gate.get('search'))}},
     }
     write(RUNTIME / 'workstation/kilo.json', cfg)
+    # No credentials or repository contents enter bootstrap settings.
+    write(RUNTIME / 'workstation/embedding-setup.json', {
+        'repository': hashlib.sha256(str(repo).encode()).hexdigest(),
+        'identity': {'url': embed['url'], 'ip': embed['ip'], 'model': embed['model'],
+                     'revision': env.get('EMBED_REVISION', '') if not demo else ''},
+        'expected_dimension': int(expected) if expected else None,
+    })
+    write(RUNTIME / 'workstation/access.json', {'repo_access': access})
     editor = {'telemetry.telemetryLevel':'off', 'update.mode':'none', 'extensions.autoCheckUpdates':False, 'extensions.autoUpdate':False,
               'git.autofetch':False, 'workbench.startupEditor':'none', 'security.workspace.trust.enabled':False,
               'kilo-code.new.model.providerID':'internal', 'kilo-code.new.model.modelID':llm['model'],
@@ -180,12 +192,19 @@ def generate(demo=False):
         'depends_on':{'ui-net':{'condition':'service_healthy'}},
         'command':['websockify','--web=/usr/share/novnc/','6080',NET+'2:5900']}
     services['workstation'] = {**base,'image':WORK,'user':'1000:1000','network_mode':'service:workstation-net',
-        'environment':{'KILO_CONFIG_CONTENT':json.dumps({'indexing':{'enabled':True}})},
         'depends_on':{'workstation-net':{'condition':'service_healthy'},'gateway':{'condition':'service_started'}},
         'shm_size':'512mb','pids_limit':768,'mem_limit':'8g',
         'tmpfs':['/tmp:rw,nosuid,nodev,size=1g','/run:rw,nosuid,nodev,size=32m'],
-        'volumes':[{'type':'bind','source':str(repo),'target':'/workspace','read_only':True,'bind':{'create_host_path':False}},
+        'volumes':[{'type':'bind','source':str(repo),'target':'/workspace','read_only':access == 'read-only','bind':{'create_host_path':False}},
                    f'{RUNTIME}/workstation:/config:ro',f'home-{ "demo" if demo else "private" }:/home/node']}
+    # One-shot bootstrap uses the same firewall, without mounting the repository.
+    # It runs only when explicitly selected, before the workstation/UI can start.
+    services['embedding-setup'] = {**base, 'image': WORK, 'user': '1000:1000',
+        'profiles': ['bootstrap'], 'network_mode': 'service:workstation-net',
+        'entrypoint': ['python3', '/bootstrap.py'], 'working_dir': '/tmp',
+        'volumes': [f'{ROOT}/scripts/embedding_setup.py:/bootstrap.py:ro',
+                    f'{RUNTIME}/workstation/embedding-setup.json:/embedding-setup.json:ro',
+                    f'home-{ "demo" if demo else "private" }:/home/node']}
     if demo:
         services['mock'] = {**base,'user':'65534:65534','networks':{'private':{'ipv4_address':NET+'5'}},'command':['python3','/opt/mock_api.py']}
     compose = {'name':'codeairlock','services':services,

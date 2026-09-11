@@ -58,5 +58,7 @@ status=pathlib.Path('/proc/self/status').read_text()
 check('no effective Linux capabilities','CapEff:\t0000000000000000' in status)
 check('no_new_privs enabled','NoNewPrivs:\t1' in status)
 check('no Docker socket',not pathlib.Path('/var/run/docker.sock').exists())
-check('repository read-only mount',any(' /workspace ' in line and ' ro,' in line for line in pathlib.Path('/proc/mounts').read_text().splitlines()))
+access=json.loads(pathlib.Path('/config/access.json').read_text())['repo_access']
+mounts=[line.split()[3].split(',') for line in pathlib.Path('/proc/mounts').read_text().splitlines() if line.split()[1]=='/workspace']
+check('repository mount matches configured access', len(mounts)==1 and ('ro' if access=='read-only' else 'rw') in mounts[0])
 raise SystemExit(0 if all(checks) else 1)

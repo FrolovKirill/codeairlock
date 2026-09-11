@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>CodeAirlock · Projects</title><link rel="stylesheet" href="/projects.css"><script src="/projects.js" defer></script></head>
+<body>
+<header><div class="brand"><span class="mark">CA</span><div><strong>CodeAirlock</strong><small>Local project manager</small></div></div><span class="badge">HOST CONTROL · LOCAL ONLY</span><button id="stop" class="quiet" disabled>Stop environment</button></header>
+<main>
+<aside>
+<div class="section-title"><h1>Projects</h1><button id="add-toggle" class="quiet">+ Add folder</button></div>
+<p class="muted">Each folder has its own sessions, index and access mode.</p>
+<form id="add-form" hidden>
+<label>Project name<input id="name" maxlength="100" required placeholder="My project"></label>
+<label>Folder on this computer<div class="path-row"><input id="path" required placeholder="/absolute/path/to/repository"><button id="browse" type="button" class="quiet">Browse…</button></div></label>
+<label>Access<select id="new-access"><option value="read-only">Read only</option><option value="read-write">Read & write · approve agent edits</option></select></label>
+<button type="submit">Add project</button>
+</form>
+<div id="projects" aria-label="Registered projects"></div>
+<div class="note"><strong>Your files stay in place.</strong><p>Read & write saves directly to the original folder. Switching projects stops the current environment. Saved sessions stay with their project.</p></div>
+</aside>
+<section class="workspace">
+<div class="workspace-top"><div><span class="eyebrow">WORKSPACE</span><h2 id="workspace-title">Choose a project</h2></div><span id="status" class="status">Connecting</span></div>
+<div id="error" class="error" role="alert" hidden></div>
+<div id="connection" class="note" hidden>Open the authenticated link in <code>runtime/manager-url.txt</code> on this computer, or restart the manager with <code>projects</code>.</div>
+<div id="desktop-tools" hidden><span>The desktop may ask for its VNC password.</span><button id="password" class="quiet">Show desktop password</button><code id="password-value"></code></div>
+<div id="desktop"><div class="empty"><span class="empty-icon">⌘</span><h3>A separate workspace for every repository</h3><p>Add a folder, choose its access mode and open it.<br>Embeddings and indexing are prepared before you start.</p></div></div>
+<footer>Model services come from your local configuration. Project paths and manager credentials are never mounted into the agent.</footer>
+</section>
+</main>
+</body></html>

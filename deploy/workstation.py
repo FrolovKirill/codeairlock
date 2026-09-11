@@ -39,6 +39,10 @@ time.sleep(4)
 # Chromium's nested setuid/user-namespace sandbox cannot run with this container's
 # no-new-privileges + dropped capabilities. The outer container/network namespace
 # is the security boundary, including against arbitrary browser/agent execution.
+# Lifecycle serialization stops the previous container before reattaching this home.
+# Chromium's hostname/PID lock otherwise points at that dead container after restart.
+for name in ('SingletonLock', 'SingletonSocket', 'SingletonCookie'):
+    (home / 'chromium' / name).unlink(missing_ok=True)
 launch(['chromium', '--no-sandbox', '--no-first-run', '--disable-background-networking',
         '--disable-sync', '--disable-default-apps', '--disable-component-update',
         '--password-store=basic', '--user-data-dir='+str(home / 'chromium'),

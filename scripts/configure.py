@@ -90,18 +90,22 @@ def rules(outbound=(), inbound=(), loopback=False):
 '''
 
 
-def generate(demo=False):
+def generate(demo=False, project=None):
     os.umask(0o077)
     RUNTIME.mkdir(exist_ok=True)
     RUNTIME.chmod(0o700)
     env = envfile()
-    repo = (ROOT / 'demo-repo') if demo else pathlib.Path(env.get('REPO_PATH', './demo-repo')).expanduser()
+    repo = (ROOT / 'demo-repo') if demo else pathlib.Path(project['path'] if project else env.get('REPO_PATH', './demo-repo')).expanduser()
     if not repo.is_absolute(): repo = ROOT / repo
     repo = repo.resolve()
     if not repo.is_dir(): raise ValueError('REPO_PATH is not an existing directory')
     if repo == ROOT or repo in ROOT.parents:
         raise ValueError('Repository mount must not include this deployment, its .env or runtime secrets')
-    access = env.get('REPO_ACCESS', 'read-only')
+    access = project['access'] if project and not demo else env.get('REPO_ACCESS', 'read-only')
+    home = 'home-demo' if demo else 'home-private'
+    if project and not demo:
+        from projects import home_volume
+        home = home_volume(project)
     if access not in ('read-only', 'read-write'):
         raise ValueError('REPO_ACCESS must be read-only or read-write')
     expected = env.get('EMBED_DIMENSION', '').strip() if not demo else ''
@@ -165,7 +169,14 @@ def generate(demo=False):
         (RUNTIME / p).chmod(0o755)
     # VNC authentication is inside the trusted localhost-only pixel UI.
     password_file = RUNTIME / 'UI_PASSWORD.txt'
-    if not password_file.exists(): write(password_file, secrets.token_urlsafe(6)[:8], 0o600)
+    if project and not demo:
+        saved_password = RUNTIME / 'project-passwords' / (project['id'] + '.txt')
+        if not saved_password.exists():
+            old = password_file.read_text().strip() if project.get('legacy_home') and password_file.exists() else secrets.token_urlsafe(6)[:8]
+            write(saved_password, old, 0o600)
+        write(password_file, saved_password.read_text().strip(), 0o600)
+    elif not password_file.exists():
+        write(password_file, secrets.token_urlsafe(6)[:8], 0o600)
     password = password_file.read_text().strip()
     subprocess.run(['docker','run','--rm','--network','none','--user','0:0','--entrypoint','x11vnc',
                     '-v',f'{RUNTIME}/workstation:/out',WORK,'-storepasswd',password,'/out/vnc.pass'],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
@@ -192,11 +203,13 @@ def generate(demo=False):
         'depends_on':{'ui-net':{'condition':'service_healthy'}},
         'command':['websockify','--web=/usr/share/novnc/','6080',NET+'2:5900']}
     services['workstation'] = {**base,'image':WORK,'user':'1000:1000','network_mode':'service:workstation-net',
+        'labels': {'io.codeairlock.project': project['id'] if project and not demo else 'demo',
+                   'io.codeairlock.access': access},
         'depends_on':{'workstation-net':{'condition':'service_healthy'},'gateway':{'condition':'service_started'}},
         'shm_size':'512mb','pids_limit':768,'mem_limit':'8g',
         'tmpfs':['/tmp:rw,nosuid,nodev,size=1g','/run:rw,nosuid,nodev,size=32m'],
         'volumes':[{'type':'bind','source':str(repo),'target':'/workspace','read_only':access == 'read-only','bind':{'create_host_path':False}},
-                   f'{RUNTIME}/workstation:/config:ro',f'home-{ "demo" if demo else "private" }:/home/node']}
+                   f'{RUNTIME}/workstation:/config:ro',f'{home}:/home/node']}
     # One-shot bootstrap uses the same firewall, without mounting the repository.
     # It runs only when explicitly selected, before the workstation/UI can start.
     services['embedding-setup'] = {**base, 'image': WORK, 'user': '1000:1000',
@@ -204,12 +217,12 @@ def generate(demo=False):
         'entrypoint': ['python3', '/bootstrap.py'], 'working_dir': '/tmp',
         'volumes': [f'{ROOT}/scripts/embedding_setup.py:/bootstrap.py:ro',
                     f'{RUNTIME}/workstation/embedding-setup.json:/embedding-setup.json:ro',
-                    f'home-{ "demo" if demo else "private" }:/home/node']}
+                    f'{home}:/home/node']}
     if demo:
         services['mock'] = {**base,'user':'65534:65534','networks':{'private':{'ipv4_address':NET+'5'}},'command':['python3','/opt/mock_api.py']}
     compose = {'name':'codeairlock','services':services,
         'networks':{'private':{'internal':True,'ipam':{'config':[{'subnet':NET+'0/24'}]}},'uplink':{},'ingress':{}},
-        'volumes':{f'home-{ "demo" if demo else "private" }':{}}}
+        'volumes':{home:{}}}
     write(RUNTIME / 'compose.json', compose, 0o600)
     write(RUNTIME / 'mode', 'demo' if demo else 'private', 0o600)
     print(f'Configured {"SYNTHETIC DEMO" if demo else "TRUSTED ENDPOINTS"}. UI: http://127.0.0.1:{port}/vnc.html')

@@ -6,7 +6,7 @@ import subprocess
 from configure import ROOT, RUNTIME, generate, write
 
 
-def start(demo=False, reindex=False):
+def start(demo=False, reindex=False, project=None):
     command = ['docker', 'compose', '-f', str(RUNTIME / 'compose.json')]
 
     def compose(*args, **kwargs):
@@ -14,7 +14,8 @@ def start(demo=False, reindex=False):
 
     if (RUNTIME / 'compose.json').exists():
         compose('down', '--remove-orphans')
-    generate(demo=demo)
+    (RUNTIME / 'active-project.json').unlink(missing_ok=True)
+    generate(demo=demo, project=project)
     try:
         # This phase has no repository mount and cannot run the agent.
         services = ['workstation-net', 'gateway'] + (['mock'] if demo else [])
@@ -38,10 +39,17 @@ def start(demo=False, reindex=False):
         deployment['services']['workstation']['environment'] = {
             'KILO_CONFIG_CONTENT': json.dumps({'indexing': {'enabled': True}})}
         write(deployment_path, deployment, 0o600)
+        if project and not demo:
+            from projects import validate_path
+            if validate_path(project['path']) != project['path']:
+                raise ValueError('Project path changed before mounting; register its new location.')
         compose('up', '-d', '--pull', 'never')
+        if project and not demo:
+            write(RUNTIME / 'active-project.json', {'id': project['id']}, 0o600)
         state = 'fresh index selected; run index before chat' if result['fresh'] else 'existing index selected'
         print(f"Embeddings: {result['dimension']} dimensions; {state}.")
     except BaseException:
+        (RUNTIME / 'active-project.json').unlink(missing_ok=True)
         # Do not leave a partial deployment after failed discovery or incompatible metadata.
         subprocess.run([*command, 'down', '--remove-orphans'], cwd=ROOT, check=False)
         raise SystemExit('Startup stopped. Resolve the error above and run up again.') from None

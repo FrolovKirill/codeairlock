@@ -53,7 +53,7 @@ the exact chat-completions and embeddings routes, rejects caller-selected models
 and remote media URLs, strips caller headers, refuses redirects, and does not log
 prompts or response bodies.
 
-The repository is mounted read-only by default. `REPO_ACCESS=read-write` permits
+Projects use read-only access by default. Choosing **Read & write** in the project manager permits
 writes to the host repository and sets Kilo edits to require approval. An approved
 shell command can also write in that mode; edit approval is not a filesystem
 security boundary. Network restrictions are identical in both modes. Kilo may read it and send
@@ -169,20 +169,79 @@ operate and trust. Certificate verification remains enabled. Set `CA_BUNDLE` to
 an absolute PEM bundle path for a private CA. IP changes require regenerating the
 deployment with the new exact value.
 
-Set `REPO_PATH` to the repository. Set `REPO_ACCESS=read-only` (the default) for
-analysis, or `REPO_ACCESS=read-write` to allow edits with Kilo approval.
-This setting also applies to the bundled repository when running `demo`. Restart with
-`./codeairlock up` after changing settings. The path must
-not contain this CodeAirlock directory because that would expose `.env` and runtime
-credentials to the workstation.
+## Projects, sessions and the local UI
 
-Start the connected environment and index before opening a chat:
+After configuring model services, run:
 
 ```sh
-./codeairlock up
-./codeairlock check
-./codeairlock index
+./codeairlock projects
 ```
+
+A local project manager opens in your browser at `127.0.0.1:6090`. Choose **Add
+folder**, enter a name and the absolute path on the Docker host, then select
+**Read only** or **Read & write**. On macOS, **Browse…** opens the native folder
+picker; other hosts accept a typed path. The path must not contain this deployment
+and its secrets. Registration and opening inspect paths and file types without reading source contents.
+System/runtime/credential directories and trees containing sockets, FIFOs or devices
+are rejected; file types are checked again just before mounting.
+
+Click **Open project**. The manager stops the current environment, mounts the
+selected folder at `/workspace`, checks embeddings, completes indexing, and then
+shows the isolated desktop. Open or continue sessions in Kilo's existing UI.
+Only one project environment runs at a time. Switching interrupts in-flight work;
+completed messages, editor settings and indexes remain in that project's Docker
+home volume. **Read & write** changes the original host files immediately; there
+is no copy-out or merge step. Agent edits and shell commands require approval.
+
+Each registered project has a stable ID and a separate `home-project-<id>` volume.
+Other projects' folders, session histories and indexes are not mounted into its
+workstation. Paths are immutable after registration: register a new location as a
+new project rather than silently attaching old sessions to a different folder.
+The registry is host-only `runtime/projects.json`; it and the Docker volumes must
+be retained together to keep the project-to-history mapping. Project removal and
+volume deletion are intentionally not exposed in this UI.
+
+**Migration:** the first manager/connected launch imports a valid legacy
+`REPO_PATH` and `REPO_ACCESS` into one project, preserving `home-private`, the
+existing sessions/indexes, and its desktop password. Old mixed history, if any,
+stays with that migrated project; it cannot be retrospectively split reliably.
+Subsequent edits to these legacy `.env` fields do not change registered projects.
+New installations have no project until one is added. `demo` remains a separate
+synthetic fixture using `home-demo`.
+
+The manager binds only to host loopback. All API requests require a random bearer
+token, exact Host and same-origin requests when Origin is present. The launch link
+uses a URL fragment, which the page removes after keeping the token in tab session
+storage. No CORS, repository file server or cloud UI is involved. The authenticated
+link is also stored in `runtime/manager-url.txt` with mode 0600. Running `projects`
+again opens the existing manager. Its port (`--port`, default 6090) must differ
+from `UI_PORT` (default 6080).
+
+A read-only bind does not block Unix socket connections. Keep host control sockets
+out of project folders for the entire session: preflight checks cannot protect
+against a trusted host adding a socket after launch. The host and its processes
+remain part of the trusted computing base.
+
+The manager is a trusted host control process with Docker access; it is outside the
+agent's network namespace and cannot be reached by the workstation. The browser
+shows only project metadata and the noVNC pixel desktop. The VNC password is
+separate and stable per project; use **Show desktop password** if prompted. Desktop
+connections are removed while switching, and project-specific VNC passwords prevent
+an old tab from silently authenticating to another project's desktop.
+
+**Stop environment** stops containers without deleting data; **Cancel & stop**
+cancels a pending open/index operation. The UI and CLI serialize lifecycle
+operations under the same host lock. Closing a browser tab does not stop the
+manager or environment. Ctrl+C in the manager terminal stops the manager (and
+cancels its pending operation), while an already-ready environment keeps running.
+After reboot, start Docker, run `./codeairlock projects`, and reopen the project.
+Saved sessions return; an interrupted model generation does not resume itself.
+
+For terminal use, `./codeairlock up --index` opens the last successfully selected
+project and completes indexing. `--project ID` chooses a registered project;
+`./codeairlock down` stops it. `up` without `--index` still supports separate
+`index` execution. Global model settings remain in `.env` and apply on the next
+project open/restart.
 
 At each `up`, a short fixed synthetic string is sent to your embedding endpoint
 through the isolated gateway. A one-shot helper shares the workstation firewall
@@ -193,14 +252,14 @@ is used. Failed detection stops startup before the editor/agent starts.
 Leave `EMBED_DIMENSION` empty or omit it. An optional positive value asserts the
 expected length; it does not resize vectors, and a mismatch stops startup.
 
-Each repository has an index profile in the persistent home volume. The profile
+Each repository has an index profile inside its own persistent home volume. The profile
 records the embedding endpoint, pinned IP, model name, optional `EMBED_REVISION`, and detected
 dimension. Changing any of these stops startup, including switching between two
-models with the same dimension. To explicitly build a fresh index:
+models with the same dimension. The manager then offers **Rebuild index & open**.
+The equivalent CLI action is:
 
 ```sh
-./codeairlock up --reindex
-./codeairlock index
+./codeairlock up --reindex --index
 ```
 
 A fresh index directory is selected; old indexes and chat history are preserved.
@@ -287,19 +346,21 @@ prompt content.
 | `EMBED_DIMENSION` | Optional expected vector length. Empty/omitted means automatic detection; mismatch stops startup. |
 | `EMBED_REVISION` | Optional operator version label; change when weights change behind the same model name. |
 | `CA_BUNDLE` | Optional absolute path to a PEM CA bundle copied into private runtime state. |
-| `REPO_PATH` | Host repository mounted at `/workspace`. |
-| `REPO_ACCESS` | `read-only` (default) or `read-write`; switches both the mount and Kilo edit policy. |
+| `REPO_PATH` | Legacy one-time project import; use the project manager for folders. |
+| `REPO_ACCESS` | Legacy one-time access import; project-specific mode is saved in the registry. Also sets demo access if explicitly present. |
 | `UI_PORT` | Localhost noVNC port, from 1024 through 65535; default `6080`. |
 | `SEARCH_BASE_URL`, `SEARCH_IP` | Optional internal SearxNG JSON endpoint and pinned RFC1918 address. Both are needed to enable search. |
 
 ## Operator commands
 
 ```text
+projects                 open the local project manager (default port 6090)
 init                     create .env from the safe example
 fetch                    download and verify pinned ARM64 release artifacts
 build                    fetch artifacts and build both local images
 demo                     start the synthetic, network-isolated demo
-up                       detect embeddings, validate index identity, then start
+up                       open the last selected project with current model settings
+up --project ID --index   open and index a registered project as one operation
 up --reindex             select a fresh index, preserving old indexes and sessions
 down                     stop this public-release Compose project
 status                   show service status
@@ -345,3 +406,12 @@ verified actual read-only write rejection and successful read-write operations, 
 index reuse after restart, startup refusal on a same-dimension model change, and
 successful Kilo indexing into a fresh directory after `demo --reindex`. Integration
 used only the included synthetic repository and synthetic model API.
+
+The project-manager update was also verified on September 11, 2026: 50 public
+regression tests passed in offline Docker and 15 project-manager tests passed on
+macOS. Browser integration covered adding/opening projects and connecting to the
+embedded desktop. Synthetic Kilo sessions were isolated between projects A and B;
+saved user/assistant messages survived switching and a full container stop/recreate.
+Chromium stale singleton locks are cleared at startup so its persistent profile
+can reopen after a container's hostname/PID changes. No real repository or model
+was used for those cross-project tests.

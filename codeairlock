@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Operator launcher. Never source .env or read repository files."""
+import argparse
 import pathlib
 import subprocess
 import sys
@@ -8,6 +9,7 @@ ROOT = pathlib.Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 from configure import generate, envfile
 from startup import start
+from projects import get_project, locked, select_project
 
 def run(args): return subprocess.run(args, cwd=ROOT, check=True)
 def compose(*args): return run(['docker','compose','-f',str(ROOT/'runtime/compose.json'),*args])
@@ -20,16 +22,38 @@ elif cmd == 'build':
     run(['docker','build','-f','deploy/infra.Dockerfile','-t','codeairlock-infra:0.1.0','.'])
     run(['docker','build','-f','deploy/workstation.Dockerfile','-t','codeairlock-workstation:0.1.0','.'])
 elif cmd in ('up','demo'):
-    if any(arg != '--reindex' for arg in sys.argv[2:]):
-        raise SystemExit('Only --reindex is accepted after up/demo')
-    start(demo=cmd=='demo', reindex='--reindex' in sys.argv[2:])
-elif cmd == 'down': compose('down','--remove-orphans')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--reindex', action='store_true')
+    parser.add_argument('--project')
+    parser.add_argument('--index', action='store_true', help='Index before releasing the project-operation lock')
+    options = parser.parse_args(sys.argv[2:])
+    with locked('operation'):
+        project = get_project(options.project) if cmd == 'up' else None
+        try:
+            start(demo=cmd=='demo', reindex=options.reindex, project=project)
+            if options.index:
+                run([sys.executable,'scripts/index_project.py'])
+            if project:
+                select_project(project['id'])
+        except BaseException:
+            if options.index and (ROOT/'runtime/compose.json').exists():
+                compose('down','--remove-orphans')
+                (ROOT/'runtime/active-project.json').unlink(missing_ok=True)
+            raise
+elif cmd == 'down':
+    with locked('operation'):
+        compose('down','--remove-orphans')
+        (ROOT/'runtime/active-project.json').unlink(missing_ok=True)
+elif cmd == 'projects':
+    run([sys.executable,'scripts/project_manager.py',*sys.argv[2:]])
 elif cmd == 'fetch': run([sys.executable,'scripts/fetch_assets.py'])
 elif cmd == 'status': compose('ps')
 elif cmd == 'check':
     compose('exec','-T','workstation','python3','/opt/probe.py')
 elif cmd == 'audit': run([sys.executable,'scripts/audit_namespaces.py'])
-elif cmd == 'index': run([sys.executable,'scripts/index_project.py'])
+elif cmd == 'index':
+    with locked('operation'):
+        run([sys.executable,'scripts/index_project.py'])
 elif cmd == 'verify-demo': run([sys.executable,'scripts/verify_demo.py'])
 elif cmd == 'verify-connected-demo': run([sys.executable,'scripts/verify_demo.py','--real-model'])
 elif cmd == 'shell': compose('exec','workstation','bash')
@@ -39,4 +63,4 @@ elif cmd == 'model-status': compose('exec','-T','gateway','python3','-c',
 elif cmd == 'logs': compose('logs','--tail','80',*(sys.argv[2:] or ['workstation']))
 else:
     print('up/demo --reindex: explicitly create a fresh semantic index; preserve sessions and old indexes.')
-    print('Usage: ./codeairlock init|fetch|build|demo|up|down|status|check|audit|index|model-status|verify-demo|verify-connected-demo|shell|logs [service]|search list|search approve ID|search deny ID')
+    print('Usage: ./codeairlock projects|init|fetch|build|demo|up|down|status|check|audit|index|model-status|verify-demo|verify-connected-demo|shell|logs [service]|search list|search approve ID|search deny ID')

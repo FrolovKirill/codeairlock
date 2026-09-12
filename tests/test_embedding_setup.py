@@ -148,7 +148,7 @@ class ConfigurationTests(unittest.TestCase):
 
 
 class StartupTests(unittest.TestCase):
-    def test_success_enables_indexing_only_after_probe(self):
+    def test_success_configures_capabilities_without_overriding_consent(self):
         with tempfile.TemporaryDirectory() as temp:
             runtime = pathlib.Path(temp)
             (runtime / 'workstation').mkdir()
@@ -166,9 +166,8 @@ class StartupTests(unittest.TestCase):
             cfg = json.loads((runtime / 'workstation/kilo.json').read_text())
             deployment = json.loads((runtime / 'compose.json').read_text())
             self.assertEqual(cfg['indexing']['dimension'], 7)
-            self.assertTrue(cfg['indexing']['enabled'])
-            override = json.loads(deployment['services']['workstation']['environment']['KILO_CONFIG_CONTENT'])
-            self.assertTrue(override['indexing']['enabled'])
+            self.assertFalse(cfg['indexing']['enabled'])
+            self.assertNotIn('KILO_CONFIG_CONTENT', deployment['services']['workstation'].get('environment', {}))
 
     def test_failed_probe_and_interrupt_clean_up_without_starting_workstation(self):
         for failure in (subprocess.CalledProcessError(1, ['synthetic']), KeyboardInterrupt()):

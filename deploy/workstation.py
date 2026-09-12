@@ -2,6 +2,7 @@
 import ctypes
 import json
 import pathlib
+import re
 import socket
 import subprocess
 import time
@@ -51,6 +52,39 @@ def editor_ready():
             return response.status == 200
     except (OSError, urllib.error.URLError): return False
 
+# VS Code settings are JSON with comments and trailing commas. Match complete
+# strings first so URLs, escaped quotes and comment-like text stay untouched.
+JSONC_TOKEN = re.compile(r'"(?:[^"\\]|\\.)*"|//[^\r\n]*|/\*.*?\*/|,(?=\s*[}\]])', re.S)
+
+def parse_settings(text):
+    def clean(match):
+        value = match.group()
+        return value if value.startswith('"') else (' ' if value.startswith('/') else '')
+    # Two passes: removing comments can expose a trailing comma.
+    value = json.loads(JSONC_TOKEN.sub(clean, JSONC_TOKEN.sub(clean, text)))
+    if not isinstance(value, dict):
+        raise ValueError('Editor settings must be an object')
+    return value
+
+# Other preferences are defaults on first creation; users own them thereafter.
+MANAGED_SETTINGS = frozenset({
+    'telemetry.telemetryLevel', 'update.mode', 'extensions.autoCheckUpdates',
+    'extensions.autoUpdate', 'git.autofetch',
+    'kilo-code.new.model.providerID', 'kilo-code.new.model.modelID',
+})
+
+def configure_editor(path, defaults):
+    if path.exists():
+        original = path.read_text()
+        settings = parse_settings(original)  # Invalid input is preserved; fail startup.
+        settings.update({k: v for k, v in defaults.items() if k in MANAGED_SETTINGS})
+    else:
+        settings = defaults.copy()
+    # Atomic replacement; a partial startup cannot truncate saved preferences.
+    temp = path.with_suffix('.tmp')
+    temp.write_text(json.dumps(settings, indent=2) + '\n')
+    temp.replace(path)
+
 def main():
     children = {}
     ready = pathlib.Path('/tmp/workstation-ready')
@@ -62,7 +96,7 @@ def main():
         for p in ['.config', '.local/share', '.cache', '.mozilla/firefox/private', 'editor/User']:
             (home / p).mkdir(parents=True, exist_ok=True)
         settings = json.loads(pathlib.Path('/config/editor.json').read_text())
-        (home / 'editor/User/settings.json').write_text(json.dumps(settings))
+        configure_editor(home / 'editor/User/settings.json', settings)
         profile = home / '.mozilla/firefox/private'
         (profile / 'user.js').write_text('''
         user_pref("browser.shell.checkDefaultBrowser", false);
@@ -79,11 +113,13 @@ def main():
         user_pref("browser.safebrowsing.phishing.enabled", false);
         user_pref("media.peerconnection.enabled", false);
         ''')
-        launch(['Xvfb', ':0', '-screen', '0', '1600x1000x24', '-s', '0', '-nolisten', 'tcp'])
+        launch(['Xvfb', ':0', '-screen', '0', '1600x1000x24', '-s', '0', '-noreset', '-nolisten', 'tcp'])
         wait_ready('display', display_ready, children)
+        subprocess.run(['python3', '/opt/keyboard_layout.py'], check=True, timeout=20,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         launch(['openbox'])
         launch(['/opt/code-server/bin/code-server', '--bind-addr', '127.0.0.1:8080', '--auth', 'none', '--disable-telemetry', '--disable-update-check', '--disable-workspace-trust', '--user-data-dir', str(home / 'editor'), '--extensions-dir', '/opt/extensions', '/workspace'])
-        launch(['x11vnc', '-display', ':0', '-forever', '-shared', '-rfbport', '5900', '-rfbauth', '/config/vnc.pass', '-noxdamage', '-nosel', '-noclipboard'])
+        launch(['x11vnc', '-display', ':0', '-forever', '-shared', '-rfbport', '5900', '-rfbauth', '/config/vnc.pass', '-noxdamage', '-xkb', '-nosel', '-noclipboard'])
         wait_ready('editor', editor_ready, children)
         wait_ready('vnc', lambda: port_ready(5900), children)
         # Chromium's nested setuid/user-namespace sandbox cannot run with this container's

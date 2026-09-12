@@ -63,7 +63,7 @@ class Reliability(unittest.TestCase):
         FaultUpstream.requests = []
         FaultUpstream.active = FaultUpstream.maximum = 0
         gateway.MODEL_GATE = gateway.ModelGate()
-        ep = {'url': f'http://synthetic.invalid:{self.up.server_port}/v1', 'ip': '127.0.0.1', 'model': 'local'}
+        ep = {'url': f'http://synthetic.invalid:{self.up.server_port}/v1', 'ip': '127.0.0.1', 'model': 'local', 'max_output': 1024}
         gateway.CONFIG = {'llm': ep, 'embed': ep}
         # Exercise real sockets without spending seconds on each backoff.
         self.sleeps = []

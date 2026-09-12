@@ -29,6 +29,7 @@ class NativeBridge(unittest.TestCase):
     def setUp(self):
         self.ep = {'url': f'http://synthetic.invalid:{self.up.server_port}/v1',
                    'ip': '127.0.0.1', 'model': 'synthetic', 'key': 'upstream-only',
+                   'max_output': 512,
                    'ollama': {'context': 8192, 'batch': 32, 'max_output': 512}}
         gateway.CONFIG = {'llm': self.ep, 'embed': {}}
         gateway.MODEL_GATE = gateway.ModelGate()

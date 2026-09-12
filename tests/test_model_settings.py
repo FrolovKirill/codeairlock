@@ -21,6 +21,12 @@ class ModelSettingsTests(unittest.TestCase):
         self.assertEqual(limits, {'protocol':'ollama','context':65536,'max_output':2048,'batch':128})
         self.assertEqual(configure.model_settings({'LLM_CONTEXT':'131072'})['context'],131072)
 
+    def test_output_must_fit_context_without_an_extra_ceiling(self):
+        self.assertEqual(configure.model_settings({'LLM_CONTEXT':'131072','LLM_MAX_OUTPUT':'131072'})['max_output'],131072)
+        with self.assertRaises(configure.ConfigurationError) as raised:
+            configure.model_settings({'LLM_CONTEXT':'1024','LLM_MAX_OUTPUT':'1025'})
+        self.assertEqual(raised.exception.code,'invalid_model_limits')
+
     def test_invalid_values_fail_without_echoing_input(self):
         for key in ('LLM_CONTEXT','LLM_MAX_OUTPUT','LLM_OLLAMA_BATCH'):
             for value in ('0','-1','1.5','PRIVATE_NOT_A_NUMBER'):
@@ -31,6 +37,19 @@ class ModelSettingsTests(unittest.TestCase):
 
     def test_demo_ignores_operator_large_values(self):
         self.assertEqual(configure.model_settings({'LLM_CONTEXT':'65536','LLM_PROTOCOL':'ollama'},demo=True),configure.model_settings({}))
+
+    def test_demo_gateway_receives_default_output_cap(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=pathlib.Path(temp); (root/'demo-repo').mkdir(); (root/'config').mkdir()
+            (root/'config/lsp.json').write_text('{}')
+            def fake_docker(*args, **kwargs):
+                (root/'runtime/workstation/vnc.pass').write_bytes(b'synthetic')
+            with patch.object(configure,'ROOT',root), patch.object(configure,'RUNTIME',root/'runtime'), \
+                 patch.object(configure,'envfile',return_value={}), \
+                 patch.object(configure.subprocess,'run',side_effect=fake_docker):
+                configure.generate(demo=True)
+            gateway=json.loads((root/'runtime/gateway.json').read_text())
+            self.assertEqual(gateway['llm']['max_output'],1024)
 
     def test_generated_kilo_and_ollama_receive_same_resolved_values(self):
         for overrides in ({'LLM_CONTEXT':'65536','LLM_MAX_OUTPUT':'2048','LLM_OLLAMA_BATCH':'128'},
@@ -49,6 +68,7 @@ class ModelSettingsTests(unittest.TestCase):
                 limits=configure.model_settings(env)
                 gateway=json.loads((root/'runtime/gateway.json').read_text())
                 kilo=json.loads((root/'runtime/workstation/kilo.json').read_text())
+                self.assertEqual(gateway['llm']['max_output'],limits['max_output'])
                 self.assertEqual(kilo['provider']['internal']['models']['synthetic']['limit'],
                                  {'context':limits['context'],'output':limits['max_output']})
                 request=ollama_adapter.prepare({'messages':[{'role':'user','content':'Synthetic test'}]},gateway['llm'])

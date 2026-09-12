@@ -93,6 +93,8 @@ def model_settings(env, demo=False):
             result[name] = int(raw)
         except ValueError:
             raise ConfigurationError('invalid_model_limits', key + ' must be a positive integer or empty') from None
+    if result['max_output'] > result['context']:
+        raise ConfigurationError('invalid_model_limits', 'LLM_MAX_OUTPUT must not exceed LLM_CONTEXT')
     return result
 
 
@@ -151,6 +153,7 @@ def generate(demo=False, project=None):
             embed['key'] = llm['key']  # One credential for the exact same API base URL.
         if limits['protocol'] == 'ollama':
             llm['ollama'] = {key: limits[key] for key in ('context', 'max_output', 'batch')}
+    llm['max_output'] = limits['max_output']
     gate = {'llm': llm, 'embed': embed}
     endpoints = [llm, embed]
     from local_search import enabled as local_search_enabled, add_services as add_search_services

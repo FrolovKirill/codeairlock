@@ -94,7 +94,7 @@ class Operations:
             self.error = ''
             self.needs_reindex = False
             self.target = project_id
-            self.phase = 'Stopping' if stop else 'Starting and indexing project'
+            self.phase = 'Stopping' if stop else 'Starting project'
             self.thread = threading.Thread(target=self._work, args=(project_id, reindex, stop), daemon=True)
             self.thread.start()
 
@@ -115,7 +115,7 @@ class Operations:
         try:
             with log_path.open('w') as log:
                 log_path.chmod(0o600)
-                args = ['down'] if stop else ['up', '--project', project_id, '--index'] + (['--reindex'] if reindex else [])
+                args = ['down'] if stop else ['up', '--project', project_id] + (['--reindex'] if reindex else [])
                 if not self._command(args, log):
                     raise RuntimeError()
                 self.phase = 'Stopped' if stop else 'Ready'

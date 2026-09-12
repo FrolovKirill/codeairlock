@@ -245,13 +245,13 @@ class OperationTests(unittest.TestCase):
                 kill.assert_called_once_with(12345, manager.signal.SIGINT)
                 operations.thread.join.assert_called_once_with(timeout=120)
 
-    def test_open_and_index_are_one_cli_transaction(self):
+    def test_open_does_not_start_independent_indexing(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(manager, 'RUNTIME', pathlib.Path(temp)):
             operations = manager.Operations()
             with patch.object(operations, '_command', return_value=True) as command:
                 operations._work('a'*32, False, False)
             self.assertEqual(command.call_count, 1)
-            self.assertEqual(command.call_args.args[0], ['up', '--project', 'a'*32, '--index'])
+            self.assertEqual(command.call_args.args[0], ['up', '--project', 'a'*32])
 
     def test_cancel_does_not_issue_a_second_unlocked_down(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(manager, 'RUNTIME', pathlib.Path(temp)):

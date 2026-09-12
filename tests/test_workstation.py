@@ -1,5 +1,7 @@
 import importlib.util
 import pathlib
+import json
+import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
@@ -39,3 +41,38 @@ class WorkstationTests(unittest.TestCase):
             path.home.side_effect = begin_setup
             self.assertEqual(workstation.main(), 31)
         self.assertEqual(marker.unlink.call_count, 2)
+
+
+class SettingsTests(unittest.TestCase):
+    def test_preserves_preferences_and_refreshes_managed_model(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = pathlib.Path(temp) / 'settings.json'
+            path.write_text('''{
+                // An ordinary VS Code settings file.
+                "editor.fontSize": 19,
+                "custom.url": "https://example.test/a/*value*/",
+                "custom.nested": {"array": [1, 2,],},
+                "kilo-code.new.model.modelID": "old",
+                "kilo-code.new.agentWorkStyle": "user-choice",
+            }''')
+            defaults = {'editor.fontSize': 14, 'kilo-code.new.model.modelID': 'new',
+                        'kilo-code.new.agentWorkStyle': 'human-in-the-loop',
+                        'telemetry.telemetryLevel': 'off'}
+            workstation.configure_editor(path, defaults)
+            workstation.configure_editor(path, defaults)  # Repeated restart.
+            saved = json.loads(path.read_text())
+            self.assertEqual(saved['editor.fontSize'], 19)
+            self.assertEqual(saved['custom.url'], 'https://example.test/a/*value*/')
+            self.assertEqual(saved['custom.nested'], {'array': [1, 2]})
+            self.assertEqual(saved['kilo-code.new.agentWorkStyle'], 'user-choice')
+            self.assertEqual(saved['kilo-code.new.model.modelID'], 'new')
+            self.assertEqual(saved['telemetry.telemetryLevel'], 'off')
+
+    def test_invalid_settings_remain_untouched(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = pathlib.Path(temp) / 'settings.json'
+            for text in ('{"broken":', '[]'):
+                path.write_text(text)
+                with self.assertRaises(ValueError):
+                    workstation.configure_editor(path, {})
+                self.assertEqual(path.read_text(), text)

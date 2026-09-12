@@ -44,8 +44,8 @@ class Tests(unittest.TestCase):
         Upstream.requests=[];Upstream.redirect=False
         gateway.SEARCHES.clear()
         gateway.MODEL_GATE = gateway.ModelGate()
-        ep={'url':f'http://does-not-resolve.invalid:{self.up.server_port}/v1','ip':'127.0.0.1','model':'local','key':'fixed-key'}
-        gateway.CONFIG={'llm':ep,'embed':ep,'search':{**ep,'url':ep['url'].replace('/v1','/search')}}
+        ep={'url':f'http://does-not-resolve.invalid:{self.up.server_port}/v1','ip':'127.0.0.1','model':'local','key':'fixed-key','max_output':64}
+        gateway.CONFIG={'llm':ep,'embed':ep,'search':{**ep,'url':ep['url'].replace('/v1','/search')},'topics':{'python':'Python pathlib official documentation'}}
     def request(self,path,body=None,headers=None,method=None):
         conn=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
         conn.request(method or ('POST' if body is not None else 'GET'),path,json.dumps(body) if body is not None else None,headers or {})
@@ -59,6 +59,23 @@ class Tests(unittest.TestCase):
         self.assertNotIn('X-Secret',h)
         self.assertNotIn('Location',headers)
         self.assertEqual(json.loads(b)['model'],'local')
+        self.assertEqual(json.loads(b)['max_tokens'],64)
+    def test_output_limit_is_clamped_and_aliases_are_unambiguous(self):
+        for key in ('max_tokens','max_completion_tokens'):
+            with self.subTest(key=key):
+                self.assertEqual(self.request('/llm/v1/chat/completions',
+                    {'model':'local','messages':[],key:1000})[0],200)
+                self.assertEqual(json.loads(Upstream.requests[-1][2])[key],64)
+        invalid = [
+            {'max_tokens':0}, {'max_tokens':True}, {'max_completion_tokens':'64'},
+            {'max_tokens':1,'max_completion_tokens':1},
+        ]
+        for fields in invalid:
+            with self.subTest(fields=fields):
+                before=len(Upstream.requests)
+                self.assertEqual(self.request('/llm/v1/chat/completions',
+                    {'model':'local','messages':[],**fields})[0],400)
+                self.assertEqual(len(Upstream.requests),before)
     def test_reject_path_and_query_bypasses(self):
         for p in ['/llm/v1/chat/completions?secret=x','/search/python?secret=x','/search/%70ython','/search/../python','http://example.com/','/llm/v1/models']:
             with self.subTest(p=p):self.assertEqual(self.request(p)[0],403)
@@ -137,9 +154,9 @@ class Tests(unittest.TestCase):
         self.assertEqual(endpoint({**base,'LLM_IP':'10.0.0.2'},'LLM')['ip'],'10.0.0.2')
     def test_public_endpoint_requires_exact_https_exception(self):
         base={'LLM_BASE_URL':'https://models.example.org/v1','LLM_MODEL':'local',
-              'LLM_IP':'1.1.1.1','LLM_TRUSTED_PUBLIC_IP':'1.1.1.1'}
-        self.assertEqual(endpoint(base,'LLM')['ip'],'1.1.1.1')
-        for patch in [{'LLM_TRUSTED_PUBLIC_IP':''}, {'LLM_TRUSTED_PUBLIC_IP':'8.8.8.8'},
+              'LLM_IP':'8.8.8.8','LLM_TRUSTED_PUBLIC_IP':'8.8.8.8'}
+        self.assertEqual(endpoint(base,'LLM')['ip'],'8.8.8.8')
+        for patch in [{'LLM_TRUSTED_PUBLIC_IP':''}, {'LLM_TRUSTED_PUBLIC_IP':'1.1.1.1'},
                       {'LLM_BASE_URL':'http://models.example.org/v1'},
                       {'LLM_BASE_URL':'https://models.example.org:8443/v1'},
                       {'LLM_IP':'169.254.169.254','LLM_TRUSTED_PUBLIC_IP':'169.254.169.254'},

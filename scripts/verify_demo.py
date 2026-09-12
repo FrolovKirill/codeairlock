@@ -21,7 +21,7 @@ prompts = [('semantic_search', 'Use semantic_search to find the function that va
            ('lsp', 'Use the lsp tool with operation findReferences, filePath /workspace/auth.py, line 4, character 5. Report the reference count.')]
 if not real: prompts = [('semantic_search','EXERCISE_SEMANTIC'),('lsp','EXERCISE_LSP')]
 for name,marker in prompts:
-    process=subprocess.run([*compose,'exec','-T','workstation','timeout','180' if real else '110','kilo','run','--format','json',marker],capture_output=True,text=True)
+    process=subprocess.run([*compose,'exec','-T','workstation','env','KILO_CONFIG_CONTENT={"indexing":{"enabled":true}}','timeout','180' if real else '110','kilo','run','--format','json',marker],capture_output=True,text=True)
     events=[json.loads(line) for line in process.stdout.splitlines() if line.startswith('{')]
     state=next((e['part']['state'] for e in events if e.get('type')=='tool_use' and e.get('part',{}).get('tool')==name),{})
     metadata=state.get('metadata',{})

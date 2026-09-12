@@ -85,6 +85,18 @@ class ModelGate:
 MODEL_GATE = ModelGate()
 
 
+def normalize_output_limit(data, endpoint):
+    """Apply the operator's output cap before either supported upstream protocol."""
+    aliases = [key for key in ('max_tokens', 'max_completion_tokens') if key in data]
+    if len(aliases) > 1:
+        raise ValueError('Specify only one output limit')
+    key = aliases[0] if aliases else 'max_tokens'
+    requested = data.get(key, endpoint['max_output'])
+    if type(requested) is not int or requested <= 0:
+        raise ValueError('Invalid output limit')
+    data[key] = min(requested, endpoint['max_output'])
+
+
 def retry_delay(attempt, retry_after=None):
     delay = 2 ** (attempt + 1) + random.uniform(0, 1)
     if retry_after:
@@ -237,6 +249,7 @@ class Handler(BaseHTTPRequestHandler):
                 messages = data.get('messages')
                 if not isinstance(messages, list):
                     raise ValueError()
+                normalize_output_limit(data, endpoint)
                 # No remote image/audio/file URLs that a model server might dereference.
                 for message in messages:
                     content = message.get('content')

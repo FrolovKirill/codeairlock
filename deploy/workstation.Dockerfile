@@ -1,5 +1,5 @@
 FROM node:22-bookworm-slim@sha256:83f487e0a63425e5b4d146fb5e5be574bcbe1b7b843d3ebafdd95eaf7767a7e5
-RUN apt-get update && apt-get install -y --no-install-recommends python3 git ripgrep firefox-esr xvfb openbox x11vnc xterm ca-certificates curl procps tini fonts-dejavu && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends python3 git ripgrep firefox-esr xvfb x11-xkb-utils xkb-data openbox x11vnc xterm ca-certificates curl procps tini fonts-dejavu && rm -rf /var/lib/apt/lists/*
 RUN npm install -g typescript@5.9.3 typescript-language-server@6.0.0 pyright@1.1.414
 RUN npm install -g @lancedb/lancedb@0.26.2
 RUN apt-get update && apt-get install -y --no-install-recommends chromium && rm -rf /var/lib/apt/lists/*
@@ -9,6 +9,7 @@ COPY vendor/kilo.vsix /tmp/kilo.vsix
 RUN /opt/code-server/bin/code-server --extensions-dir /opt/extensions --install-extension /tmp/kilo.vsix && rm /tmp/kilo.vsix && chmod -R a+rX /opt/extensions
 RUN find /opt/extensions -type f -path '*/bin/kilo' -exec ln -s '{}' /usr/local/bin/kilo \;
 COPY deploy/workstation.py /opt/workstation.py
+COPY deploy/keyboard_layout.py /opt/keyboard_layout.py
 COPY scripts/search_mcp.py /opt/search_mcp.py
 COPY scripts/probe.py /opt/probe.py
 USER 1000:1000

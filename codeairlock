@@ -26,28 +26,18 @@ elif cmd in ('up','demo'):
     parser = argparse.ArgumentParser()
     parser.add_argument('--reindex', action='store_true')
     parser.add_argument('--project')
-    parser.add_argument('--index', action='store_true', help='Index before releasing the project-operation lock')
+    parser.add_argument('--index', action='store_true', help='Wait for the editor index; enable indexing in Kilo first')
     options = parser.parse_args(sys.argv[2:])
     with locked('operation'), Report(demo=cmd=='demo').run() as report:
         with report.stage('project_selection'):
             project = get_project(options.project) if cmd == 'up' else None
-        try:
-            start(demo=cmd=='demo', reindex=options.reindex, project=project, report=report)
-            if options.index:
-                with report.stage('indexing'):
-                    run([sys.executable,'scripts/index_project.py'])
-            if project:
-                with report.stage('project_registration'):
-                    select_project(project['id'])
-        except BaseException:
-            if options.index and (ROOT/'runtime/compose.json').exists():
-                try:
-                    with report.stage('cleanup'):
-                        compose('down','--remove-orphans')
-                        (ROOT/'runtime/active-project.json').unlink(missing_ok=True)
-                except Exception:
-                    print('Cleanup could not finish. Check Docker; containers may remain.', file=sys.stderr)
-            raise
+        start(demo=cmd=='demo', reindex=options.reindex, project=project, report=report)
+        if project:
+            with report.stage('project_registration'):
+                select_project(project['id'])
+        if options.index:
+            with report.stage('indexing'):
+                run([sys.executable,'scripts/index_project.py'])
 elif cmd == 'down':
     with locked('operation'):
         compose('down','--remove-orphans')
@@ -76,4 +66,4 @@ elif cmd == 'model-status': compose('exec','-T','gateway','python3','-c',
 elif cmd == 'logs': compose('logs','--tail','80',*(sys.argv[2:] or ['workstation']))
 else:
     print('up/demo --reindex: explicitly create a fresh semantic index; preserve sessions and old indexes.')
-    print('Usage: ./codeairlock projects|init|fetch|build|search-build|demo|up|down|status|check|audit|index|model-status|verify-demo|verify-connected-demo|shell|diagnostics|logs [service]|search list|search approve ID|search deny ID')
+    print('Usage: ./codeairlock projects|init|fetch|build|demo|up|down|status|check|audit|index|model-status|verify-demo|verify-connected-demo|shell|diagnostics|logs [service]|search list|search approve ID|search deny ID')

@@ -213,7 +213,7 @@ System/runtime/credential directories and trees containing sockets, FIFOs or dev
 are rejected; file types are checked again just before mounting.
 
 Click **Open project**. The manager stops the current environment, mounts the
-selected folder at `/workspace`, checks embeddings, completes indexing, and then
+selected folder at `/workspace`, checks embeddings, and then
 shows the isolated desktop. Open or continue sessions in Kilo's existing UI.
 Only one project environment runs at a time. Switching interrupts in-flight work;
 completed messages, editor settings and indexes remain in that project's Docker
@@ -271,10 +271,10 @@ cancels its pending operation), while an already-ready environment keeps running
 After reboot, start Docker, run `./codeairlock projects`, and reopen the project.
 Saved sessions return; an interrupted model generation does not resume itself.
 
-For terminal use, `./codeairlock up --index` opens the last successfully selected
-project and completes indexing. `--project ID` chooses a registered project;
-`./codeairlock down` stops it. `up` without `--index` still supports separate
-`index` execution. Global model settings remain in `.env` and apply on the next
+For terminal use, `./codeairlock up` opens the last successfully selected
+project. Open Kilo and enable **Enable indexing**, then wait for Complete/Indexed. `--project ID` chooses a registered project;
+`./codeairlock down` stops it. `index` waits for the index owned by the editor extension; `up --index` adds the same
+optional wait after startup. Neither command changes indexing consent. Global model settings remain in `.env` and apply on the next
 project open/restart.
 
 At each `up`, a short fixed synthetic string is sent to your embedding endpoint
@@ -293,7 +293,7 @@ models with the same dimension. The manager then offers **Rebuild index & open**
 The equivalent CLI action is:
 
 ```sh
-./codeairlock up --reindex --index
+./codeairlock up --reindex
 ```
 
 A fresh index directory is selected; old indexes and chat history are preserved.
@@ -306,9 +306,10 @@ may point at a different backend even when the URL and model name stay the same.
 Repository identity uses the resolved host path; moving the repository selects a
 separate index. Replacing its contents at the same path should use `up --reindex`.
 
-`index` starts Kilo's loopback-only indexing service if needed, reports only state
+`index` waits for the editor-owned indexing service, reports only state
 and counts, waits for `Complete`, and sends no chat request. Wait for that success
-message before using the UI. This keeps initial chat behavior separate from the
+message before sending the first chat message. Open Kilo and enable indexing first.
+This keeps initial chat behavior separate from the
 repository-wide embedding pass and makes failures easier to diagnose.
 
 The optional `verify-connected-demo` command is limited to the included synthetic
@@ -332,6 +333,11 @@ reloads only the VNC connection and keeps the project, editor and agent running.
 A temporary manager status failure preserves the existing desktop connection.
 The noVNC controls default to the right edge so they do not cover the Kilo icon;
 an explicitly saved position is preserved.
+
+The desktop preloads US and Cyrillic letters in one XKB group, using levels 3/4
+for Cyrillic. This avoids exhausting x11vnc's small dynamic keysym pool during
+Russian input. Select your input language on the host; remote Right Alt is used
+as the level-3 modifier. Other scripts still depend on x11vnc's dynamic mapping.
 
 After upgrading, rebuild with `./codeairlock build`, then restart the environment
 and manager. Keep raw `runtime/project-operation.log` and Docker/Kilo logs local:
@@ -437,7 +443,7 @@ prompt content.
 | `LLM_TRUSTED_PUBLIC_IP`, `EMBED_TRUSTED_PUBLIC_IP` | Exact repeated public IP exception; only valid with HTTPS on port 443. |
 | `LLM_MODEL`, `EMBED_MODEL` | Exact upstream model names accepted by the gateway. |
 | `LLM_API_KEY`, `EMBED_API_KEY` | Optional credentials. The embedding key inherits the LLM key only when both base URLs are identical. |
-| `LLM_CONTEXT`, `LLM_MAX_OUTPUT` | Context and output limits advertised to Kilo. |
+| `LLM_CONTEXT`, `LLM_MAX_OUTPUT` | Context metadata for Kilo (also sent to native Ollama), and gateway-enforced output cap. |
 | `EMBED_DIMENSION` | Optional expected vector length. Empty/omitted means automatic detection; mismatch stops startup. |
 | `EMBED_REVISION` | Optional operator version label; change when weights change behind the same model name. |
 | `CA_BUNDLE` | Optional absolute path to a PEM CA bundle copied into private runtime state. |
@@ -458,13 +464,13 @@ fetch                    download and verify pinned ARM64 release artifacts
 build                    fetch artifacts and build both local images
 demo                     start the synthetic, network-isolated demo
 up                       open the last selected project with current model settings
-up --project ID --index   open and index a registered project as one operation
+up --project ID           open a registered project (enable indexing in Kilo)
 up --reindex             select a fresh index, preserving old indexes and sessions
 down                     stop this public-release Compose project
 status                   show service status
 check                    run fixed network and configuration probes
 audit                    inspect all namespace firewall policies
-index                    complete semantic indexing before chat
+index                    wait for indexing enabled in the Kilo editor
 model-status             show queue/retry/cooldown counters
 verify-demo              exercise semantic search and LSP with synthetic APIs
 verify-connected-demo    exercise the synthetic repository with trusted endpoints
@@ -524,3 +530,45 @@ approval UI were checked separately with synthetic inputs. Full shutdown removed
 the owned containers, closed UI/manager ports and retained persistent volumes.
 These observations are from macOS ARM64 and do not establish portability to every
 Docker installation or continuing availability of external search engines.
+
+## Settings ownership and indexing
+
+The wrapper provisions the embedding endpoint, model, dimension and compatible
+LanceDB directory. **Enable indexing** in Kilo owns per-project indexing consent;
+the manager does not run an independent indexer or force consent through environment
+variables. Kilo preserves that consent in the project's editor home across restarts.
+If indexing is off, ordinary file reads, grep and chat remain available.
+
+`./codeairlock index` discovers the authenticated editor-owned server inside the
+container and waits for its index. It never starts another server, enables indexing,
+or sends a chat request. Only fixed states and numeric counters are printed; server
+credentials and private status messages are not exposed. If Kilo is not open or
+indexing is disabled, it explains what to do and exits unsuccessfully without
+stopping the environment. `up --index` behaves the same. The manager opens projects
+without waiting for indexing, so the editor remains accessible for enabling it.
+`--reindex` selects a fresh store; enable indexing in Kilo to populate it.
+The synthetic `verify-demo` CLI check explicitly opts into indexing for its own
+short-lived test process, only after verifying the known demo mount.
+
+On startup the wrapper refreshes the chosen LLM provider/model and settings that
+disable telemetry, automatic updates and Git autofetch. All other existing editor
+preferences are preserved, including the user's Kilo work style. Autocomplete and
+human-in-the-loop preferences are seeded only for a new settings file. JSONC comments
+and trailing commas are accepted; saving normalizes the file to JSON. Invalid settings
+are preserved and stop startup rather than being silently discarded.
+
+The gateway rejects model IDs other than the configured LLM/embedding model.
+`LLM_MAX_OUTPUT` is enforced for both Ollama and OpenAI-compatible inference: omitted
+limits receive the configured default, higher requests are capped, and positive
+integer requests below the cap are respected. Requests supplying both token-limit
+aliases are rejected. The output cap must not exceed `LLM_CONTEXT`. Ollama receives
+the configured context; in OpenAI-compatible mode context is metadata for Kilo and
+the server determines its actual capacity. Changing UI metadata does not reconfigure
+the server. A different provider or URL can cause an error, but cannot expand the
+container's network allowlist or the gateway's fixed routes.
+
+Kilo tool permissions govern agent behaviour; they are not filesystem isolation.
+Read-only is enforced by Docker's repository mount. In read-write mode an approved
+shell command can also modify files, and enabling auto-approval in Kilo reduces
+review of those changes. Neither changes the network boundary. Web search approval
+remains enforced by the gateway independently of Kilo's permissions.

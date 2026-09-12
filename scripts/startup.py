@@ -38,15 +38,12 @@ def start(demo=False, reindex=False, project=None, report=None):
             cfg = json.loads(config_path.read_text())
             cfg['indexing']['dimension'] = result['dimension']
             cfg['indexing']['lancedb']['directory'] = result['directory']
-            cfg['indexing']['enabled'] = True
+            cfg['indexing']['enabled'] = False
             write(config_path, cfg)
-            # Kilo's per-project defaults can otherwise disable indexing on fresh homes.
-            # Add the override only after discovery/identity validation succeeds.
+            # Provision capabilities only. Kilo's per-project UI consent owns
+            # enable/disable, including on restart; no environment override.
             deployment_path = RUNTIME / 'compose.json'
             deployment = json.loads(deployment_path.read_text())
-            deployment['services']['workstation']['environment'] = {
-                'KILO_CONFIG_CONTENT': json.dumps({'indexing': {'enabled': True}})}
-            write(deployment_path, deployment, 0o600)
             if project and not demo:
                 from projects import validate_path
                 if validate_path(project['path']) != project['path']:
@@ -61,8 +58,8 @@ def start(demo=False, reindex=False, project=None, report=None):
                                check=True, capture_output=True, timeout=60)
         if project and not demo:
             write(RUNTIME / 'active-project.json', {'id': project['id']}, 0o600)
-        state = 'fresh index selected; run index before chat' if result['fresh'] else 'existing index selected'
-        print(f"Embeddings: {result['dimension']} dimensions; {state}.")
+        state = 'fresh index selected' if result['fresh'] else 'existing index selected'
+        print(f"Embeddings: {result['dimension']} dimensions; {state}. Enable indexing in Kilo to use semantic search.")
     except BaseException:
         # Capture fixed Docker status fields before cleanup destroys the evidence.
         if report:

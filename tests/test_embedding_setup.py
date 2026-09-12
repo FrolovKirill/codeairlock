@@ -135,11 +135,16 @@ class ConfigurationTests(unittest.TestCase):
                 self.assertNotIn('KILO_CONFIG_CONTENT', services['workstation'].get('environment', {}))
 
     def test_invalid_access_fails_before_docker(self):
-        with patch.object(configure, 'envfile', return_value={'REPO_ACCESS': 'yes'}), \
-             patch.object(configure.subprocess, 'run') as docker:
-            with self.assertRaisesRegex(ValueError, 'REPO_ACCESS'):
-                configure.generate(demo=True)
-            docker.assert_not_called()
+        with tempfile.TemporaryDirectory() as temp:
+            root = pathlib.Path(temp)
+            (root/'demo-repo').mkdir()
+            with patch.object(configure, 'ROOT', root), \
+                 patch.object(configure, 'RUNTIME', root/'runtime'), \
+                 patch.object(configure, 'envfile', return_value={'REPO_ACCESS': 'yes'}), \
+                 patch.object(configure.subprocess, 'run') as docker:
+                with self.assertRaisesRegex(ValueError, 'REPO_ACCESS'):
+                    configure.generate(demo=True)
+                docker.assert_not_called()
 
 
 class StartupTests(unittest.TestCase):
@@ -182,6 +187,41 @@ class StartupTests(unittest.TestCase):
                 self.assertIn('down', calls[-1])
                 self.assertEqual(sum('up' in call for call in calls), 1)
                 self.assertNotIn('workstation', calls[0])
+
+class CleanupFailureTests(unittest.TestCase):
+    def test_failed_cleanup_has_fixed_message_and_keeps_original_stage(self):
+        import diagnostics
+        with tempfile.TemporaryDirectory() as temp:
+            runtime = pathlib.Path(temp)
+            report = diagnostics.Report(runtime=runtime)
+            def fail(args, **kwargs):
+                raise subprocess.CalledProcessError(1, ['PRIVATE_COMMAND'])
+            with patch.object(startup, 'RUNTIME', runtime), patch.object(startup, 'generate'), \
+                 patch.object(startup.subprocess, 'run', side_effect=fail), \
+                 patch.object(report, 'services'), \
+                 self.assertRaisesRegex(SystemExit, 'Startup failed and cleanup could not finish'), \
+                 report.run():
+                startup.start(report=report)
+            phases = {x['stage']: x['status'] for x in report.data['stages']}
+            self.assertEqual(phases['bootstrap'], 'failed')
+            self.assertEqual(phases['cleanup'], 'failed')
+            self.assertNotIn('PRIVATE_COMMAND', (runtime/diagnostics.REPORT_NAME).read_text())
+
+    def test_snapshot_failure_does_not_skip_cleanup(self):
+        import diagnostics
+        with tempfile.TemporaryDirectory() as temp:
+            report = diagnostics.Report(runtime=temp)
+            def run(args, **kwargs):
+                if 'up' in args:
+                    raise subprocess.CalledProcessError(1, ['synthetic'])
+                return subprocess.CompletedProcess(args, 0)
+            with patch.object(startup, 'RUNTIME', pathlib.Path(temp)), \
+                 patch.object(startup, 'generate'), \
+                 patch.object(startup.subprocess, 'run', side_effect=run) as docker, \
+                 patch.object(report, 'services', side_effect=OSError('synthetic')), \
+                 self.assertRaisesRegex(SystemExit, 'Startup stopped'):
+                startup.start(report=report)
+            self.assertIn('down', docker.call_args.args[0])
 
 if __name__ == '__main__':
     unittest.main()

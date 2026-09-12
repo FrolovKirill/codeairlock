@@ -261,6 +261,17 @@ class OperationTests(unittest.TestCase):
             run.assert_not_called()
             self.assertEqual(operations.phase, 'Stopped')
 
+    def test_status_failure_is_not_reported_as_stopped(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(manager, 'RUNTIME', pathlib.Path(temp)):
+            (pathlib.Path(temp)/'compose.json').write_text('{}')
+            operation = manager.Operations()
+            for failure in (subprocess.CompletedProcess([], 1, ''), subprocess.TimeoutExpired(['docker'], 5)):
+                kwargs = {'side_effect': failure} if isinstance(failure, Exception) else {'return_value': failure}
+                with patch.object(manager.subprocess, 'run', **kwargs), self.assertRaises(RuntimeError):
+                    operation.running_project()
+            with patch.object(manager.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, '')):
+                self.assertIsNone(operation.running_project())
+
     def test_running_identity_comes_from_container_label(self):
         with tempfile.TemporaryDirectory() as temp, patch.object(manager, 'RUNTIME', pathlib.Path(temp)):
             (pathlib.Path(temp)/'compose.json').write_text('{}')

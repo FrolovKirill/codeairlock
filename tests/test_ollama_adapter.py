@@ -54,7 +54,7 @@ class NativeBridge(unittest.TestCase):
         self.assertEqual(path, '/api/chat')
         self.assertEqual(sent['options'], {'num_ctx': 8192, 'num_batch': 32, 'num_predict': 512})
         self.assertFalse(sent['think'])
-        self.assertFalse(sent['stream'])
+        self.assertTrue(sent['stream'])
         self.assertEqual(json.loads(raw)['choices'][0]['message']['content'], 'OK')
 
     def test_agent_cannot_override_native_options(self):
@@ -68,6 +68,31 @@ class NativeBridge(unittest.TestCase):
         events = [json.loads(line[6:]) for line in raw.decode().splitlines() if line.startswith('data: {')]
         self.assertEqual(events[-1]['usage']['total_tokens'], 19)
         self.assertEqual(events[-2]['choices'][0]['finish_reason'], 'stop')
+
+    def test_native_stream_is_combined_and_usage_preserved(self):
+        parts = [dict(self.native, done=False, message={'content': 'Hel'}),
+                 dict(self.native, message={'content': 'lo'})]
+        FaultUpstream.plan = [{'body': b''.join(json.dumps(p).encode()+b'\n' for p in parts),
+                              'content_type': 'application/x-ndjson'}]
+        status, raw, _ = self.call()
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(raw)['choices'][0]['message']['content'], 'Hello')
+        self.assertEqual(json.loads(raw)['usage']['total_tokens'], 19)
+
+    def test_truncated_native_stream_is_not_replayed(self):
+        part = dict(self.native, done=False)
+        FaultUpstream.plan = [{'body': json.dumps(part).encode()+b'\n',
+                              'content_type': 'application/x-ndjson'}]
+        self.assertEqual(self.call()[0], 424)
+        self.assertEqual(len(FaultUpstream.requests), 1)
+
+    def test_native_stream_tool_call_is_validated(self):
+        part = dict(self.native, message={'content': '', 'tool_calls': [
+            {'function': {'name': 'unexpected', 'arguments': {}}}]})
+        FaultUpstream.plan = [{'body': json.dumps(part).encode()+b'\n',
+                              'content_type': 'application/x-ndjson'}]
+        self.assertEqual(self.call()[0], 424)
+        self.assertEqual(len(FaultUpstream.requests), 1)
 
     def test_tool_call_roundtrip(self):
         tools = [{'type': 'function', 'function': {'name': 'lookup', 'parameters': {'type': 'object'}}}]

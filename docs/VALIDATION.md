@@ -57,3 +57,30 @@ The first host-side unit-test attempt could not bind loopback sockets because of
 the invoking filesystem/process sandbox and therefore ran zero tests. The isolated
 network-disabled container run above is the successful test result. No project
 runtime container, Compose stack, model endpoint, or repository mount was started.
+
+## Results on 2026-09-12
+
+The public copy was compared with the working wrapper. General desktop recovery,
+readiness, model configuration, native Ollama streaming, and startup diagnostics
+changes were synchronized. Personal environment values, incremental local-image
+build recipes, endpoint-specific probes, runtime state and test-session artifacts
+were excluded. Existing public names and stricter asset/ignore rules were kept.
+
+- All **93** unit and fault-injection tests passed in a Python 3.11 container with
+  `--network none`, a read-only root filesystem, dropped capabilities,
+  `no-new-privileges`, temporary `/tmp`, and read-only mounts of only the public
+  `scripts/`, `tests/`, and `deploy/` directories. The container was removed after
+  the run. No working project or model service was used by these tests.
+- Python AST parsing, `node --check ui/projects.js`, and `git diff --check` passed.
+- The publication inventory was checked locally against private deployment keys,
+  endpoint values and host paths, without printing those values. No matches or
+  prohibited runtime/download/log files were found.
+- Independent Sol review identified cleanup error handling and potentially slow
+  diagnostic snapshots. The fixes preserve explicit cleanup failures, bound the
+  snapshot to a shared five-second budget, and prevent diagnostic write/snapshot
+  failures from blocking cleanup. Regression tests cover these cases. The final
+  re-review found no remaining publication blockers.
+
+These checks do not constitute a full security audit or a clean-host image build.
+An upstream proxy can still time out before Ollama emits its first token; native
+streaming does not remove model-loading or prompt-processing latency.

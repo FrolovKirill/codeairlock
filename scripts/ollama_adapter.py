@@ -1,6 +1,7 @@
 """Bounded native Ollama calls behind the existing fixed OpenAI gateway route.
 
-Native responses are buffered, validated, then returned as JSON or OpenAI SSE.
+Native chunks keep the upstream connection active; the complete response is
+validated before it is returned as JSON or OpenAI SSE.
 Only operator configuration can select resource options, never the agent.
 """
 import json
@@ -39,7 +40,7 @@ def prepare(data, endpoint):
         if role == 'tool':
             converted['tool_name'] = names[message['tool_call_id']]
         messages.append(converted)
-    result = {'model': endpoint['model'], 'messages': messages, 'stream': False,
+    result = {'model': endpoint['model'], 'messages': messages, 'stream': True,
               'think': False, 'keep_alive': '2m',
               'options': {'num_ctx': options['context'], 'num_batch': options['batch'],
                           'num_predict': min(requested, options['max_output'])}}
@@ -66,6 +67,38 @@ def prepare(data, endpoint):
         elif fmt.get('type') != 'text':
             raise ValueError('Unsupported response format')
     return result
+
+
+
+def read_response(response):
+    """Collect bounded Ollama NDJSON without waiting for one silent JSON response."""
+    if 'application/x-ndjson' not in response.getheader('Content-Type', ''):
+        raw = response.read(MAX_RESPONSE + 1)
+        if len(raw) > MAX_RESPONSE:
+            raise ValueError('Native response too large')
+        return raw
+    size = 0
+    content, calls = [], []
+    while True:
+        line = response.readline(MAX_RESPONSE - size + 1)
+        size += len(line)
+        if not line or size > MAX_RESPONSE:
+            raise ValueError('Incomplete or oversized native stream')
+        part = json.loads(line)
+        if not isinstance(part, dict) or part.get('error'):
+            raise ValueError('Native stream failed')
+        msg = part.get('message', {})
+        text = msg.get('content', '')
+        tools = msg.get('tool_calls', [])
+        if not isinstance(text, str) or not isinstance(tools, list):
+            raise ValueError('Invalid native chunk')
+        content.append(text)
+        calls.extend(tools)
+        if part.get('done') is True:
+            part['message'] = {'role': 'assistant', 'content': ''.join(content)}
+            if calls:
+                part['message']['tool_calls'] = calls
+            return json.dumps(part).encode()
 
 
 def finish(data, endpoint, raw):

@@ -21,8 +21,8 @@
 <div class="workspace-top"><div><span class="eyebrow">WORKSPACE</span><h2 id="workspace-title">Choose a project</h2></div><span id="status" class="status">Connecting</span></div>
 <div id="error" class="error" role="alert" hidden></div>
 <div id="connection" class="note" hidden>Open the authenticated link in <code>runtime/manager-url.txt</code> on this computer, or restart the manager with <code>projects</code>.</div>
-<div id="desktop-tools" hidden><span>The desktop may ask for its VNC password.</span><button id="password" class="quiet">Show desktop password</button><code id="password-value"></code></div>
-<div id="desktop"><div class="empty"><span class="empty-icon">⌘</span><h3>A separate workspace for every repository</h3><p>Add a folder, choose its access mode and open it.<br>Embeddings and indexing are prepared before you start.</p></div></div>
+<div id="desktop-tools" hidden><span>The desktop may ask for its VNC password.</span><button id="password" class="quiet">Show desktop password</button><code id="password-value"></code><button id="reconnect-desktop" class="quiet" title="Reconnect the display without restarting VS Code, the agent or indexing.">Reconnect display</button><button id="fullscreen" class="quiet" aria-controls="desktop-shell" aria-pressed="false">Full screen</button></div>
+<div id="desktop-shell"><button id="fullscreen-exit" class="quiet" title="Exit full screen">Exit full screen</button><div id="desktop"><div class="empty"><span class="empty-icon">⌘</span><h3>A separate workspace for every repository</h3><p>Add a folder, choose its access mode and open it.<br>Embeddings and indexing are prepared before you start.</p></div></div></div>
 <footer>Model services come from your local configuration. Project paths and manager credentials are never mounted into the agent.</footer>
 </section>
 </main>

@@ -17,6 +17,13 @@ INFRA = 'codeairlock-infra:0.1.0'
 WORK = 'codeairlock-workstation:0.1.0'
 
 
+class ConfigurationError(ValueError):
+    """A fixed diagnostic code; never attach setting values."""
+    def __init__(self, code, message):
+        super().__init__(message)
+        self.code = code
+
+
 def envfile():
     path = ROOT / '.env'
     if not path.exists():
@@ -66,6 +73,29 @@ def write(path, data, mode=0o644):
     temp.replace(path)
 
 
+def model_settings(env, demo=False):
+    # One source of truth for the Kilo model metadata and native Ollama request.
+    values = {} if demo else env
+    protocol = values.get('LLM_PROTOCOL', '').strip() or 'openai'
+    if protocol not in ('openai', 'ollama'):
+        raise ConfigurationError('invalid_model_limits', 'LLM_PROTOCOL must be openai or ollama')
+    result = {'protocol': protocol}
+    for key, name, default in [('LLM_CONTEXT', 'context', 16384),
+                               ('LLM_MAX_OUTPUT', 'max_output', 1024),
+                               ('LLM_OLLAMA_BATCH', 'batch', 32)]:
+        raw = values.get(key, '').strip()
+        if not raw:
+            result[name] = default
+            continue
+        try:
+            if not re.fullmatch(r'[0-9]+', raw) or int(raw) <= 0:
+                raise ValueError()
+            result[name] = int(raw)
+        except ValueError:
+            raise ConfigurationError('invalid_model_limits', key + ' must be a positive integer or empty') from None
+    return result
+
+
 def rules(outbound=(), inbound=(), loopback=False):
     # Pre-NAT DNS block is essential: Docker remaps 127.0.0.11:53 internally.
     return '''table inet private_env {
@@ -111,6 +141,7 @@ def generate(demo=False, project=None):
     expected = env.get('EMBED_DIMENSION', '').strip() if not demo else ''
     if expected and (not expected.isdecimal() or int(expected) <= 0):
         raise ValueError('EMBED_DIMENSION must be empty (automatic) or a positive integer')
+    limits = model_settings(env, demo)
     if demo:
         llm = {'url': 'http://synthetic:9000/v1', 'ip': NET+'5', 'model': 'demo-llm', 'key': ''}
         embed = {'url': 'http://synthetic:9000/v1', 'ip': NET+'5', 'model': 'demo-embed', 'key': ''}
@@ -118,15 +149,8 @@ def generate(demo=False, project=None):
         llm, embed = endpoint(env, 'LLM'), endpoint(env, 'EMBED')
         if not embed['key'] and embed['url'] == llm['url']:
             embed['key'] = llm['key']  # One credential for the exact same API base URL.
-        protocol = env.get('LLM_PROTOCOL', 'openai')
-        if protocol not in ('openai', 'ollama'):
-            raise ValueError('LLM_PROTOCOL must be openai or ollama')
-        if protocol == 'ollama':
-            context, output, batch = (int(env.get(key, default)) for key, default in
-                                      [('LLM_CONTEXT', '8192'), ('LLM_MAX_OUTPUT', '512'), ('LLM_OLLAMA_BATCH', '32')])
-            if not 512 <= context <= 16384 or not 1 <= output <= 1024 or not 1 <= batch <= 64:
-                raise ValueError('Conservative Ollama profile requires context512..16384, output1..1024, batch1..64')
-            llm['ollama'] = {'context': context, 'max_output': output, 'batch': batch}
+        if limits['protocol'] == 'ollama':
+            llm['ollama'] = {key: limits[key] for key in ('context', 'max_output', 'batch')}
     gate = {'llm': llm, 'embed': embed}
     endpoints = [llm, embed]
     from local_search import enabled as local_search_enabled, add_services as add_search_services
@@ -156,7 +180,7 @@ def generate(demo=False, project=None):
         'agent': {'title': {'disable': True}},
         'provider': {'internal': {'npm': '@ai-sdk/openai-compatible', 'name': 'Internal LLM only',
             'options': {'baseURL': 'http://172.30.88.3:8081/llm/v1', 'apiKey': 'internal-gateway'},
-            'models': {llm['model']: {'name': llm['model'], 'tool_call': True, 'limit': {'context': int(env.get('LLM_CONTEXT',32768)), 'output': int(env.get('LLM_MAX_OUTPUT',4096))}}}}},
+            'models': {llm['model']: {'name': llm['model'], 'tool_call': True, 'limit': {'context': limits['context'], 'output': limits['max_output']}}}}},
         'indexing': {'enabled': False, 'provider': 'openai-compatible', 'model': embed['model'],
             'openai-compatible': {'baseUrl': 'http://172.30.88.3:8081/embed/v1', 'apiKey': 'internal-gateway'},
             'vectorStore': 'lancedb', 'lancedb': {'directory': '/home/node/index'}, 'embeddingBatchSize': 1 if llm.get('ollama') else 16, 'searchMaxResults': 12, 'searchMinScore': 0.15 if demo else 0.4},
@@ -221,6 +245,8 @@ def generate(demo=False, project=None):
                    'io.codeairlock.access': access},
         'depends_on':{'workstation-net':{'condition':'service_healthy'},'gateway':{'condition':'service_started'}},
         'shm_size':'512mb','pids_limit':768,'mem_limit':'8g',
+        'healthcheck':{'test':['CMD','test','-f','/tmp/workstation-ready'],
+                       'interval':'2s','timeout':'1s','retries':40},
         'tmpfs':['/tmp:rw,nosuid,nodev,size=1g','/run:rw,nosuid,nodev,size=32m'],
         'volumes':[{'type':'bind','source':str(repo),'target':'/workspace','read_only':access == 'read-only','bind':{'create_host_path':False}},
                    f'{RUNTIME}/workstation:/config:ro',f'{home}:/home/node']}

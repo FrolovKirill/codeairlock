@@ -40,16 +40,20 @@ class Operations:
             compose = ['docker', 'compose', '-f', str(RUNTIME / 'compose.json')]
             result = subprocess.run([*compose, 'ps', '-q', 'workstation'], capture_output=True, text=True, timeout=5)
             container = result.stdout.strip()
-            if result.returncode or not container:
+            if result.returncode:
+                raise RuntimeError('Workspace status temporarily unavailable.')
+            if not container:
                 return None
             # Project identity and running state come from the same container snapshot.
             result = subprocess.run(['docker', 'inspect', '--format',
                 '{{.State.Running}} {{index .Config.Labels "io.codeairlock.project"}}', container],
                 capture_output=True, text=True, timeout=5)
             fields = result.stdout.strip().split()
-            return fields[1] if result.returncode == 0 and len(fields) == 2 and fields[0] == 'true' else None
+            if result.returncode or len(fields) != 2 or fields[0] not in ('true', 'false'):
+                raise RuntimeError('Workspace status temporarily unavailable.')
+            return fields[1] if fields[0] == 'true' else None
         except (OSError, subprocess.TimeoutExpired):
-            return None
+            raise RuntimeError('Workspace status temporarily unavailable.') from None
 
     def state(self):
         external_busy = False
@@ -224,7 +228,10 @@ class Handler(BaseHTTPRequestHandler):
         if not self.allowed(api=self.path.startswith('/api/')):
             return self.reply(403, {'error': 'Access denied.'})
         if self.path == '/api/state':
-            state = self.server.operations.state()
+            try:
+                state = self.server.operations.state()
+            except RuntimeError:
+                return self.reply(503, {'error': 'Workspace status temporarily unavailable. The desktop connection is preserved.'})
             state['ui_port'] = self.server.ui_port
             return self.reply(200, state)
         if self.path == '/api/search':

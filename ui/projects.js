@@ -15,11 +15,20 @@ const accessChoices = new Map();
 const empty = $('desktop').firstElementChild.cloneNode(true);
 async function api(path, body) {
   if (quitting && path !== '/api/quit') throw new Error('The environment is shutting down.');
-  const response = await fetch(path, {method: body === undefined ? 'GET' : 'POST',
-    headers: {'Authorization': 'Bearer ' + token, ...(body === undefined ? {} : {'Content-Type': 'application/json'})},
-    body: body === undefined ? undefined : JSON.stringify(body)});
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Request failed.');
+  const controller = new AbortController();
+  const timer = path === '/api/state' ? setTimeout(() => controller.abort(), 12000) : null;
+  let response, data;
+  try {
+    response = await fetch(path, {method: body === undefined ? 'GET' : 'POST',
+      headers: {'Authorization': 'Bearer ' + token, ...(body === undefined ? {} : {'Content-Type': 'application/json'})},
+      body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal});
+    try { data = await response.json(); } catch (_) { data = {}; }
+  } finally { if (timer !== null) clearTimeout(timer); }
+  if (!response.ok) {
+    const failure = new Error(data.error || 'Request failed.');
+    failure.status = response.status;
+    throw failure;
+  }
   return data;
 }
 function error(message) { $('error').textContent = message; $('error').hidden = !message; }
@@ -55,14 +64,44 @@ function renderProjects() {
     $('projects').append(card);
   }
 }
+// Expand inside the current app even if the host browser denies native fullscreen.
+function leaveFullscreen() {
+  const shell = $('desktop-shell');
+  shell.classList.remove('expanded');
+  $('fullscreen').setAttribute('aria-pressed', 'false');
+  if (document.fullscreenElement && shell.contains(document.fullscreenElement)) {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+$('fullscreen').onclick = async () => {
+  const shell = $('desktop-shell');
+  if (shell.classList.contains('expanded')) { leaveFullscreen(); return; }
+  shell.classList.add('expanded');
+  $('fullscreen').setAttribute('aria-pressed', 'true');
+  if (shell.requestFullscreen && document.fullscreenEnabled) {
+    try { await shell.requestFullscreen(); } catch (_) { /* Keep the in-app expansion. */ }
+  }
+};
+$('fullscreen-exit').onclick = leaveFullscreen;
+$('reconnect-desktop').onclick = () => {
+  const frame = $('desktop').querySelector('iframe');
+  if (frame) frame.replaceWith(frame.cloneNode(true));
+};
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) leaveFullscreen();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') leaveFullscreen();
+});
 function clearDesktop() {
+  leaveFullscreen();
   if (desktopProject !== null) {
     $('desktop').replaceChildren(empty.cloneNode(true)); desktopProject = null;
   }
   $('desktop-tools').hidden = true; $('password-value').textContent = '';
 }
 async function openProject(id, access, reindex) {
-  try { clearDesktop(); await api('/api/open', {id, access, reindex}); await refresh(); }
+  try { await api('/api/open', {id, access, reindex}); clearDesktop(); await refresh(); }
   catch (e) { error(e.message); }
 }
 async function refresh() {
@@ -84,11 +123,22 @@ async function refresh() {
         clearDesktop(); const frame = document.createElement('iframe');
         frame.title = 'Isolated desktop · ' + active.name;
         frame.src = `http://127.0.0.1:${state.ui_port}/vnc.html?resize=scale&autoconnect=1`;
+        frame.allowFullscreen = true;
+        frame.allow = 'fullscreen';
         frame.referrerPolicy = 'no-referrer'; $('desktop').replaceChildren(frame); desktopProject = state.active;
       }
       $('desktop-tools').hidden = false;
     } else clearDesktop();
-  } catch (e) { if (!quitting) { $('status').textContent = 'Disconnected'; $('connection').hidden = false; error(e.message); clearDesktop(); } }
+  } catch (e) {
+    if (!quitting) {
+      const unauthorized = e.status === 401 || e.status === 403;
+      $('status').textContent = unauthorized ? 'Authentication required' : 'Manager unavailable';
+      $('connection').hidden = !unauthorized;
+      error(unauthorized ? 'Open the authenticated manager link again.' : 'Cannot check workspace status. Retrying automatically; your desktop connection is kept.');
+      // A failed health poll is not evidence that the desktop stopped.
+      if (unauthorized) clearDesktop();
+    }
+  }
   finally { refreshBusy = false; }
 }
 $('add-toggle').onclick = () => { $('add-form').hidden = !$('add-form').hidden; if (!$('add-form').hidden) $('name').focus(); };

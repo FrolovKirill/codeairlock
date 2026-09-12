@@ -324,9 +324,7 @@ class Handler(BaseHTTPRequestHandler):
                     elif response.status == 409 or response.status >= 500:
                         return self.model_error('nonretryable_upstream_response', response.status)
                     elif native is not None and response.status == 200:
-                        raw = response.read(ollama_adapter.MAX_RESPONSE + 1)
-                        if len(raw) > ollama_adapter.MAX_RESPONSE:
-                            raise ValueError('Native response too large')
+                        raw = ollama_adapter.read_response(response)
                         content_type, converted = ollama_adapter.finish(native, endpoint, raw)
                         if self.disconnected(): return
                         exposed = True

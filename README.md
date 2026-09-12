@@ -183,13 +183,18 @@ LLM_OLLAMA_BATCH=32
 
 Keep `LLM_BASE_URL` ending in `/v1`; the gateway derives the corresponding
 `/api/chat` route, including any deployment prefix. Embeddings still use the
-OpenAI-compatible API. Only the operator can select this mode. The adapter bounds
-context to 512–16384, output to 1–1024 and batch to 1–64; changing only
-`LLM_PROTOCOL` while leaving the example's larger OpenAI limits will fail validation.
+OpenAI-compatible API. Only the operator can select this mode. Explicit positive integers in `.env` are used without an artificial wrapper
+ceiling. Missing, empty or whitespace-only values default to context **16384**,
+output **1024** and batch **32**. Kilo and native Ollama use the same resolved
+values. Invalid nonempty values are rejected instead of silently replaced.
 It sends `think=false` and `keep_alive=2m`. These limits do not guarantee that a
 particular model fits your server. Tool calls and JSON responses are translated;
-streaming clients receive buffered SSE after generation completes, not live token
-streaming. `LLM_PROTOCOL=openai` remains the default.
+the gateway receives a native Ollama stream to keep upstream proxies active,
+validates the complete response, then returns buffered SSE to streaming clients.
+The UI does not yet receive live tokens. A proxy can still time out before the
+first token: allow enough time for model loading and prompt processing. A very
+small `LLM_OLLAMA_BATCH` can make large agent prompts slow; tune it to the
+server's available memory. `LLM_PROTOCOL=openai` remains the default.
 
 ## Projects, sessions and the local UI
 
@@ -310,6 +315,27 @@ The optional `verify-connected-demo` command is limited to the included syntheti
 repository, but it launches separate Kilo runs and is not a benchmark or an exact
 reproduction of the index-first interactive workflow. No public SearxNG service or
 clean Linux installation is claimed as tested here.
+
+## Startup diagnostics and desktop recovery
+
+Use `./codeairlock diagnostics` to print the latest startup snapshot. It reports
+stage names, elapsed time, fixed error codes, container health/exit status and
+Docker's OOM flag. The exporter rebuilds an allowlisted schema; it does not print
+repository paths, prompts, API keys, exception text or raw logs. The snapshot is
+stored locally at `runtime/startup-diagnostics.json` and is not a live monitor.
+An OOM flag of `false` does not rule out an individual child process being killed.
+
+Startup checks display/editor/VNC readiness and audits the network namespaces
+before marking the project ready. Xvfb screen blanking is disabled. In the manager,
+**Full screen** expands the desktop in the current page; **Reconnect display**
+reloads only the VNC connection and keeps the project, editor and agent running.
+A temporary manager status failure preserves the existing desktop connection.
+The noVNC controls default to the right edge so they do not cover the Kilo icon;
+an explicitly saved position is preserved.
+
+After upgrading, rebuild with `./codeairlock build`, then restart the environment
+and manager. Keep raw `runtime/project-operation.log` and Docker/Kilo logs local:
+they may contain sensitive data, unlike the diagnostic export.
 
 ## UI permissions and approved search
 
